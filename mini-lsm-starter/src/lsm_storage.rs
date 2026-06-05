@@ -313,12 +313,22 @@ impl LsmStorageInner {
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.state.read().memtable.put(key, value)
+        let mut read_guard = self.state.read();
+        while read_guard.memtable.approximate_size() > self.options.target_sst_size {
+            let state_lock = self.state_lock.lock();
+            read_guard = self.state.read();
+            if read_guard.memtable.approximate_size() > self.options.target_sst_size {
+                drop(read_guard);
+                self.force_freeze_memtable(&state_lock)?;
+                read_guard = self.state.read();
+            }
+        }
+        read_guard.memtable.put(key, value)
     }
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, key: &[u8]) -> Result<()> {
-        self.state.read().memtable.put(key, b"")
+        self.put(key, b"")
     }
 
     pub(crate) fn path_of_sst_static(path: impl AsRef<Path>, id: usize) -> PathBuf {
@@ -343,7 +353,14 @@ impl LsmStorageInner {
 
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
-        unimplemented!()
+        let memtable = MemTable::create(self.next_sst_id());
+        {
+            let mut guard = self.state.write();
+            let state = Arc::get_mut(&mut guard).ok_or(anyhow::anyhow!("Failed to get state"))?;
+            state.imm_memtables.insert(0, state.memtable.clone());
+            state.memtable = Arc::new(memtable);
+        }
+        Ok(())
     }
 
     /// Force flush the earliest-created immutable memtable to disk
