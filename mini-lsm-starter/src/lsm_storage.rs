@@ -320,13 +320,12 @@ impl LsmStorageInner {
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let mut read_guard = self.state.read();
         while read_guard.memtable.approximate_size() > self.options.target_sst_size {
+            drop(read_guard);
             let state_lock = self.state_lock.lock();
-            read_guard = self.state.read();
-            if read_guard.memtable.approximate_size() > self.options.target_sst_size {
-                drop(read_guard);
+            if self.state.read().memtable.approximate_size() > self.options.target_sst_size {
                 self.force_freeze_memtable(&state_lock)?;
-                read_guard = self.state.read();
             }
+            read_guard = self.state.read();
         }
         read_guard.memtable.put(key, value)
     }
