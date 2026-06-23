@@ -78,6 +78,6 @@ impl BlockBuilder {
     }
 
     fn get_free_space(&self) -> usize {
-        return self.block_size - 2 - self.offsets.len() * 2 - self.data.len();
+        self.block_size - 2 - self.offsets.len() * 2 - self.data.len()
     }
 }
