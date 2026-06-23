@@ -60,17 +60,14 @@ pub struct MergeIterator<I: StorageIterator> {
 
 impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
-        let mut heap: BinaryHeap<HeapWrapper<I>> = iters
+        let mut iters: BinaryHeap<HeapWrapper<I>> = iters
             .into_iter()
             .filter(|iter| iter.is_valid())
             .enumerate()
             .map(|(i, iter)| HeapWrapper(i, iter))
             .collect();
-        let current = heap.pop();
-        Self {
-            iters: heap,
-            current: current,
-        }
+        let current = iters.pop();
+        Self { iters, current }
     }
 }
 

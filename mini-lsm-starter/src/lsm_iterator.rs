@@ -96,9 +96,17 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
         } else if !self.iter.is_valid() {
             Ok(())
         } else {
-            let result = self.iter.next();
-            self.has_errored |= result.is_err();
-            result
+            loop {
+                let result = self.iter.next();
+
+                if result.is_err() {
+                    self.has_errored = true;
+                } else if self.iter.is_valid() && self.iter.value().is_empty() {
+                    continue;
+                }
+
+                return result;
+            }
         }
     }
 }
