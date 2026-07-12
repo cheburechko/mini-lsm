@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 pub use builder::SsTableBuilder;
-use bytes::Buf;
+use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
@@ -44,21 +44,38 @@ pub struct BlockMeta {
     pub last_key: KeyBytes,
 }
 
+fn read_value(buf: &mut impl Buf) -> KeyBytes {
+    let len = buf.get_u16() as usize;
+    KeyBytes::from_bytes(buf.copy_to_bytes(len))
+}
+
 impl BlockMeta {
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(
-        block_meta: &[BlockMeta],
-        #[allow(clippy::ptr_arg)] // remove this allow after you finish
-        buf: &mut Vec<u8>,
-    ) {
-        unimplemented!()
+    pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
+        buf.put_u16(block_meta.len() as u16);
+        for item in block_meta {
+            buf.put_u64(item.offset as u64);
+            buf.put_u16(item.first_key.len() as u16);
+            buf.put(item.first_key.raw_ref());
+            buf.put_u16(item.last_key.len() as u16);
+            buf.put(item.last_key.raw_ref());
+        }
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(buf: impl Buf) -> Vec<BlockMeta> {
-        unimplemented!()
+    pub fn decode_block_meta(mut buf: impl Buf) -> Vec<BlockMeta> {
+        let n = buf.get_u16();
+        let mut result = Vec::with_capacity(n.into());
+        for _ in 0..n {
+            result.push(BlockMeta {
+                offset: buf.get_u64() as usize,
+                first_key: read_value(&mut buf),
+                last_key: read_value(&mut buf),
+            })
+        }
+        result
     }
 }
 
