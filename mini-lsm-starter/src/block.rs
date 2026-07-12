@@ -24,10 +24,19 @@ pub use builder::BlockBuilder;
 use bytes::{Buf, BufMut, Bytes};
 pub use iterator::BlockIterator;
 
+use crate::key::KeySlice;
+
 /// A block is the smallest unit of read and caching in LSM tree. It is a collection of sorted key-value pairs.
 pub struct Block {
     pub(crate) data: Vec<u8>,
     pub(crate) offsets: Vec<u16>,
+}
+
+fn read_value<'slice>(buf: &mut &'slice [u8]) -> &'slice [u8] {
+    let len = buf.get_u16() as usize;
+    let result = &buf[..len];
+    buf.advance(len);
+    result
 }
 
 impl Block {
@@ -55,5 +64,41 @@ impl Block {
             data: Vec::from(&data[..offsets_offset]),
             offsets,
         }
+    }
+
+    pub fn count(&self) -> usize {
+        self.offsets.len()
+    }
+
+    pub fn get_entry(&self, idx: usize) -> (KeySlice<'_>, (usize, usize)) {
+        let offset = self.offsets.get(idx);
+        if let Some(offset) = offset {
+            let offset = *offset as usize;
+            let mut entry_buf = &self.data[offset..];
+            let key = read_value(&mut entry_buf);
+            let value = read_value(&mut entry_buf);
+            let value_start = offset + key.len() + U16_SIZE * 2;
+            (
+                KeySlice::from_slice(key),
+                (value_start, value_start + value.len()),
+            )
+        } else {
+            (KeySlice::from_slice(&[]), (0, 0))
+        }
+    }
+
+    pub fn find_key(&self, key: KeySlice) -> usize {
+        self.offsets.partition_point(|offset| {
+            let mut buf = &self.data[(*offset as usize)..];
+            read_value(&mut buf) < key.raw_ref()
+        })
+    }
+
+    pub fn get_first_key(&self) -> KeySlice<'_> {
+        self.get_entry(0).0
+    }
+
+    pub fn get_last_key(&self) -> KeySlice<'_> {
+        self.get_entry(self.count() - 1).0
     }
 }

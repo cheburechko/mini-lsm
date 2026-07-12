@@ -12,16 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::sync::Arc;
 
-use crate::{
-    block::U16_SIZE,
-    key::{KeySlice, KeyVec},
-};
-use bytes::Buf;
+use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
 
@@ -39,33 +32,9 @@ pub struct BlockIterator {
     first_key: KeyVec,
 }
 
-fn read_value<'slice>(buf: &mut &'slice [u8]) -> &'slice [u8] {
-    let len = buf.get_u16() as usize;
-    let result = &buf[..len];
-    buf.advance(len);
-    result
-}
-
-fn get_entry(block: &Block, idx: usize) -> (KeySlice<'_>, (usize, usize)) {
-    let offset = block.offsets.get(idx);
-    if let Some(offset) = offset {
-        let offset = *offset as usize;
-        let mut entry_buf = &block.data[offset..];
-        let key = read_value(&mut entry_buf);
-        let value = read_value(&mut entry_buf);
-        let value_start = offset + key.len() + U16_SIZE * 2;
-        (
-            KeySlice::from_slice(key),
-            (value_start, value_start + value.len()),
-        )
-    } else {
-        (KeySlice::from_slice(&[]), (0, 0))
-    }
-}
-
 impl BlockIterator {
     fn new(block: Arc<Block>) -> Self {
-        let first_key = KeyVec::from_vec(read_value(&mut block.data.as_slice()).to_vec());
+        let first_key = block.get_first_key().to_key_vec();
         Self {
             block,
             key: KeyVec::new(),
@@ -121,17 +90,13 @@ impl BlockIterator {
     /// Note: You should assume the key-value pairs in the block are sorted when being added by
     /// callers.
     pub fn seek_to_key(&mut self, key: KeySlice) {
-        let idx = self.block.offsets.partition_point(|offset| {
-            let mut buf = &self.block.data[(*offset as usize)..];
-            read_value(&mut buf) < key.raw_ref()
-        });
-        self.seek(idx);
+        self.seek(self.block.find_key(key));
     }
 
     fn seek(&mut self, idx: usize) {
         self.idx = idx;
 
-        let (key, value_range) = get_entry(&self.block, idx);
+        let (key, value_range) = self.block.get_entry(idx);
 
         self.key.set_from_slice(key);
 
