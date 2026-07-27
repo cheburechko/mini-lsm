@@ -84,7 +84,7 @@ impl SsTableBuilder {
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
         self.finalize_block();
-        let meta_offset = self.meta.len();
+        let meta_offset = self.data.len();
         BlockMeta::encode_block_meta(self.meta.as_slice(), &mut self.data);
         self.data.put_u32(meta_offset as u32);
         let file_object = FileObject::create(path.as_ref(), self.data)?;
@@ -97,8 +97,8 @@ impl SsTableBuilder {
             block_meta_offset: meta_offset,
             id,
             block_cache,
-            first_key: first_key,
-            last_key: last_key,
+            first_key,
+            last_key,
             bloom: None,
             max_ts: 0,
         })

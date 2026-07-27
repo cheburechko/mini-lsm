@@ -23,7 +23,7 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 pub use builder::SsTableBuilder;
 use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
@@ -131,6 +131,8 @@ pub struct SsTable {
     max_ts: u64,
 }
 
+const EXTRA_SIZE: u64 = std::mem::size_of::<u32>() as u64;
+
 impl SsTable {
     #[cfg(test)]
     pub(crate) fn open_for_test(file: FileObject) -> Result<Self> {
@@ -139,7 +141,28 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        unimplemented!()
+        let buf = file.read(file.1 - EXTRA_SIZE, EXTRA_SIZE)?;
+        let block_meta_offset = buf.as_slice().get_u32() as usize;
+        let block_meta = BlockMeta::decode_block_meta(
+            file.read(
+                block_meta_offset as u64,
+                file.1 - block_meta_offset as u64 - EXTRA_SIZE,
+            )?
+            .as_slice(),
+        );
+        let first_key = block_meta.first().context("empty meta")?.first_key.clone();
+        let last_key = block_meta.last().context("empty meta")?.last_key.clone();
+        Ok(Self {
+            file,
+            block_meta,
+            block_meta_offset,
+            id: 0,
+            block_cache: None,
+            first_key,
+            last_key,
+            bloom: None,
+            max_ts: 0,
+        })
     }
 
     /// Create a mock SST with only first key + last key metadata
@@ -164,7 +187,19 @@ impl SsTable {
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        let meta = self
+            .block_meta
+            .get(block_idx)
+            .context("block_id out of range")?;
+        let next_offset = if let Some(next_meta) = self.block_meta.get(block_idx + 1) {
+            next_meta.offset
+        } else {
+            self.block_meta_offset
+        } as u64;
+        let data = self
+            .file
+            .read(meta.offset as u64, next_offset - meta.offset as u64)?;
+        Ok(Arc::new(Block::decode(data.as_ref())))
     }
 
     /// Read a block from disk, with block cache. (Day 4)
@@ -176,7 +211,14 @@ impl SsTable {
     /// Note: You may want to make use of the `first_key` stored in `BlockMeta`.
     /// You may also assume the key-value pairs stored in each consecutive block are sorted.
     pub fn find_block_idx(&self, key: KeySlice) -> usize {
-        unimplemented!()
+        let mut idx = self
+            .block_meta
+            .partition_point(|meta| meta.first_key.as_key_slice() <= key);
+        idx = idx.saturating_sub(1);
+        if idx < self.num_of_blocks() - 1 && self.block_meta[idx].last_key.as_key_slice() < key {
+            idx += 1
+        }
+        idx
     }
 
     /// Get number of data blocks.
