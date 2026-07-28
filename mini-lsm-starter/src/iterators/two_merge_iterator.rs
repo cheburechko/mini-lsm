@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
+use std::cmp::Ordering;
 
 use anyhow::Result;
 
@@ -25,6 +24,7 @@ pub struct TwoMergeIterator<A: StorageIterator, B: StorageIterator> {
     a: A,
     b: B,
     // Add fields as need
+    order: Ordering,
 }
 
 impl<
@@ -33,7 +33,20 @@ impl<
 > TwoMergeIterator<A, B>
 {
     pub fn create(a: A, b: B) -> Result<Self> {
-        unimplemented!()
+        let order = Self::cmp(&a, &b);
+        Ok(Self { a, b, order })
+    }
+
+    fn cmp(a: &A, b: &B) -> Ordering {
+        if a.is_valid() && b.is_valid() {
+            a.key().cmp(&b.key())
+        } else if a.is_valid() {
+            Ordering::Less
+        } else if b.is_valid() {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        }
     }
 }
 
@@ -45,18 +58,33 @@ impl<
     type KeyType<'a> = A::KeyType<'a>;
 
     fn key(&self) -> Self::KeyType<'_> {
-        unimplemented!()
+        if self.order == Ordering::Greater {
+            self.b.key()
+        } else {
+            self.a.key()
+        }
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        if self.order == Ordering::Greater {
+            self.b.value()
+        } else {
+            self.a.value()
+        }
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.a.is_valid() || self.b.is_valid()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.order != Ordering::Greater {
+            self.a.next()?
+        }
+        if self.order != Ordering::Less {
+            self.b.next()?
+        }
+        self.order = Self::cmp(&self.a, &self.b);
+        Ok(())
     }
 }
