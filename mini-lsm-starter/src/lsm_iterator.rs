@@ -12,26 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
+use std::ops::{Bound, RangeBounds};
 
 use anyhow::{Result, bail};
+use bytes::Bytes;
 
 use crate::{
-    iterators::{StorageIterator, merge_iterator::MergeIterator},
+    iterators::{
+        StorageIterator, merge_iterator::MergeIterator, two_merge_iterator::TwoMergeIterator,
+    },
     mem_table::MemTableIterator,
+    table::SsTableIterator,
 };
 
 /// Represents the internal type for an LSM iterator. This type will be changed across the course for multiple times.
-type LsmIteratorInner = MergeIterator<MemTableIterator>;
+pub(crate) type LsmIteratorInner =
+    TwoMergeIterator<MergeIterator<MemTableIterator>, MergeIterator<SsTableIterator>>;
 
 pub struct LsmIterator {
     inner: LsmIteratorInner,
+    range: (Bound<Bytes>, Bound<Bytes>),
+    valid: bool,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
-        Ok(Self { inner: iter })
+    pub(crate) fn new(inner: LsmIteratorInner, end_bound: Bound<Bytes>) -> Result<Self> {
+        let range = (Bound::Unbounded, end_bound);
+        let mut result = Self {
+            inner,
+            range,
+            valid: true,
+        };
+        result.update_is_valid();
+        Ok(result)
+    }
+
+    fn update_is_valid(&mut self) {
+        self.valid = self.inner.is_valid() && self.range.contains(self.inner.key().raw_ref())
     }
 }
 
@@ -39,7 +56,7 @@ impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        self.inner.is_valid()
+        self.valid
     }
 
     fn key(&self) -> &[u8] {
@@ -51,7 +68,9 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        self.inner.next()
+        self.inner.next()?;
+        self.update_is_valid();
+        Ok(())
     }
 }
 
