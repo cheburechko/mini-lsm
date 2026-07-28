@@ -325,7 +325,8 @@ impl LsmStorageInner {
                 .find_map(|memtable| memtable.get(key))
         });
         if result.is_none() {
-            let iter = Self::create_sstable_merge_iter(state, Bound::Included(key))?;
+            let iter =
+                Self::create_sstable_merge_iter(state, Bound::Included(key), Bound::Included(key))?;
             if iter.is_valid() && iter.key() == KeySlice::from_slice(key) {
                 result.replace(Bytes::copy_from_slice(iter.value()));
             }
@@ -391,8 +392,6 @@ impl LsmStorageInner {
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
-        let state_lock = self.state_lock.lock();
-
         let memtable = {
             let guard = self.state.read();
             let table = guard.imm_memtables.last();
@@ -405,13 +404,17 @@ impl LsmStorageInner {
         let mut builder = SsTableBuilder::new(self.options.block_size);
         memtable.flush(&mut builder)?;
 
-        let mut path = PathBuf::from(self.path.clone());
+        let mut path = self.path.clone();
         path.push(memtable.id().to_string());
         let sstable =
             Arc::from(builder.build(memtable.id(), Some(Arc::clone(&self.block_cache)), path)?);
 
+        let state_lock = self.state_lock.lock();
         let mut guard = self.state.write();
         let state = Arc::get_mut(&mut guard).context("failed to get state")?;
+        if state.imm_memtables.last().is_none_or(|table| table.id() != memtable.id()) {
+            return Ok(());
+        }
 
         state.imm_memtables.pop();
         state.l0_sstables.insert(0, memtable.id());
@@ -440,7 +443,7 @@ impl LsmStorageInner {
                 .collect(),
         );
 
-        let sstable_iter = Self::create_sstable_merge_iter(guard, lower)?;
+        let sstable_iter = Self::create_sstable_merge_iter(guard, lower, upper)?;
 
         let mut iter = FusedIterator::new(LsmIterator::new(
             LsmIteratorInner::create(memtable_iter, sstable_iter)?,
@@ -455,18 +458,17 @@ impl LsmStorageInner {
     fn create_sstable_merge_iter(
         state: ReadLockGuard,
         lower: Bound<&[u8]>,
+        upper: Bound<&[u8]>,
     ) -> Result<MergeIterator<SsTableIterator>> {
-        let tables = state
-            .l0_sstables
-            .iter()
-            .map(|id| {
-                state
-                    .sstables
-                    .get(id)
-                    .and_then(|table| Some(Arc::clone(table)))
-                    .context("missing sstable")
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut tables = Vec::with_capacity(state.l0_sstables.len());
+        for id in state.l0_sstables.iter() {
+            let table = state.sstables.get(id).context("missing sstable")?;
+            if !Self::has_intersection(table, lower, upper) {
+                continue;
+            }
+            tables.push(Arc::clone(table));
+        }
+
         drop(state);
 
         let create_sstable_iter = |table| -> Result<Box<SsTableIterator>> {
@@ -493,5 +495,35 @@ impl LsmStorageInner {
                 .map(create_sstable_iter)
                 .collect::<Result<Vec<_>>>()?,
         ))
+    }
+
+    fn has_intersection(table: &Arc<SsTable>, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> bool {
+        match lower {
+            Bound::Excluded(bound) => {
+                if table.last_key().raw_ref() <= bound {
+                    return false;
+                }
+            }
+            Bound::Included(bound) => {
+                if table.last_key().raw_ref() < bound {
+                    return false;
+                }
+            }
+            Bound::Unbounded => (),
+        }
+        match upper {
+            Bound::Excluded(bound) => {
+                if table.first_key().raw_ref() >= bound {
+                    return false;
+                }
+            }
+            Bound::Included(bound) => {
+                if table.first_key().raw_ref() > bound {
+                    return false;
+                }
+            }
+            Bound::Unbounded => (),
+        }
+        true
     }
 }
