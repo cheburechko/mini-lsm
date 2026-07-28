@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
@@ -175,7 +175,16 @@ impl Drop for MiniLsm {
 
 impl MiniLsm {
     pub fn close(&self) -> Result<()> {
-        unimplemented!()
+        self.flush_notifier.send(())?;
+        self.compaction_notifier.send(())?;
+
+        if let Some(thread) = self.flush_thread.lock().take() {
+            thread.join().map_err(|err| anyhow!("{:?}", err))?;
+        }
+        if let Some(thread) = self.compaction_thread.lock().take() {
+            thread.join().map_err(|err| anyhow!("{:?}", err))?;
+        }
+        Ok(())
     }
 
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
