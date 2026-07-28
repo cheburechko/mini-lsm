@@ -301,17 +301,24 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        let state = self.state.read();
-        Ok(state
-            .memtable
-            .get(key)
-            .or_else(|| {
-                state
-                    .imm_memtables
-                    .iter()
-                    .find_map(|memtable| memtable.get(key))
-            })
-            .filter(|value| !value.is_empty()))
+        let state = {
+            let state = self.state.read();
+            Arc::clone(&state)
+        };
+
+        let mut result = state.memtable.get(key).or_else(|| {
+            state
+                .imm_memtables
+                .iter()
+                .find_map(|memtable| memtable.get(key))
+        });
+        if result.is_none() {
+            let iter = Self::create_sstable_merge_iter(&state, Bound::Included(key))?;
+            if iter.is_valid() && iter.key() == KeySlice::from_slice(key) {
+                result.replace(Bytes::copy_from_slice(iter.value()));
+            }
+        }
+        Ok(result.filter(|value| !value.is_empty()))
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -398,8 +405,24 @@ impl LsmStorageInner {
                 .collect(),
         );
 
+        let sstable_iter = Self::create_sstable_merge_iter(&snapshot, lower)?;
+
+        let mut iter = FusedIterator::new(LsmIterator::new(
+            LsmIteratorInner::create(memtable_iter, sstable_iter)?,
+            map_bound(upper),
+        )?);
+        if iter.is_valid() && iter.value().is_empty() {
+            iter.next()?;
+        }
+        Ok(iter)
+    }
+
+    fn create_sstable_merge_iter(
+        state: &Arc<LsmStorageState>,
+        lower: Bound<&[u8]>,
+    ) -> Result<MergeIterator<SsTableIterator>> {
         let create_sstable_iter = |id| -> Result<Box<SsTableIterator>> {
-            let table = Arc::clone(snapshot.sstables.get(id).context("missing sstable")?);
+            let table = Arc::clone(state.sstables.get(id).context("missing sstable")?);
             let iter = match lower {
                 Bound::Excluded(key) => {
                     let key = KeySlice::from_slice(key);
@@ -417,21 +440,12 @@ impl LsmStorageInner {
             Ok(Box::new(iter?))
         };
 
-        let sstable_iter = MergeIterator::create(
-            snapshot
+        Ok(MergeIterator::create(
+            state
                 .l0_sstables
                 .iter()
                 .map(create_sstable_iter)
                 .collect::<Result<Vec<_>>>()?,
-        );
-
-        let mut iter = FusedIterator::new(LsmIterator::new(
-            LsmIteratorInner::create(memtable_iter, sstable_iter)?,
-            map_bound(upper),
-        )?);
-        if iter.is_valid() && iter.value().is_empty() {
-            iter.next()?;
-        }
-        Ok(iter)
+        ))
     }
 }
