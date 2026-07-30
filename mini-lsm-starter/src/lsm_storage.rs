@@ -412,7 +412,11 @@ impl LsmStorageInner {
         let state_lock = self.state_lock.lock();
         let mut guard = self.state.write();
         let state = Arc::get_mut(&mut guard).context("failed to get state")?;
-        if state.imm_memtables.last().is_none_or(|table| table.id() != memtable.id()) {
+        if state
+            .imm_memtables
+            .last()
+            .is_none_or(|table| table.id() != memtable.id())
+        {
             return Ok(());
         }
 
