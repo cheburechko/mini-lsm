@@ -21,7 +21,7 @@ pub use builder::BlockBuilder;
 use bytes::{Buf, BufMut, Bytes};
 pub use iterator::BlockIterator;
 
-use crate::key::KeySlice;
+use crate::key::{KeySlice, KeyVec};
 
 /// A block is the smallest unit of read and caching in LSM tree. It is a collection of sorted key-value pairs.
 pub struct Block {
@@ -67,35 +67,56 @@ impl Block {
         self.offsets.len()
     }
 
-    pub fn get_entry(&self, idx: usize) -> (KeySlice<'_>, (usize, usize)) {
+    pub fn get_entry(&self, idx: usize, key: &mut KeyVec) -> (usize, usize) {
         let offset = self.offsets.get(idx);
         if let Some(offset) = offset {
             let offset = *offset as usize;
             let mut entry_buf = &self.data[offset..];
-            let key = read_value(&mut entry_buf);
+
+            let key_len = self.read_key(&mut entry_buf, key);
+
             let value = read_value(&mut entry_buf);
-            let value_start = offset + key.len() + U16_SIZE * 2;
-            (
-                KeySlice::from_slice(key),
-                (value_start, value_start + value.len()),
-            )
+            let value_start = offset + key_len + U16_SIZE;
+            (value_start, value_start + value.len())
         } else {
-            (KeySlice::from_slice(&[]), (0, 0))
+            key.clear();
+            (0, 0)
+        }
+    }
+
+    fn read_key(&self, from: &mut &[u8], to: &mut KeyVec) -> usize {
+        to.clear();
+        if from.as_ptr() == self.data.as_ptr() {
+            to.append(read_value(from));
+            to.len() + U16_SIZE
+        } else {
+            let overlap = from.get_u16() as usize;
+            to.append(&self.data[U16_SIZE..U16_SIZE + overlap]);
+            let rest = from.get_u16() as usize;
+            to.append(&from[..rest]);
+            from.advance(rest);
+            rest + U16_SIZE * 2
         }
     }
 
     pub fn find_key(&self, key: KeySlice) -> usize {
+        let mut cur_key = KeyVec::new();
         self.offsets.partition_point(|offset| {
             let mut buf = &self.data[(*offset as usize)..];
-            read_value(&mut buf) < key.raw_ref()
+            self.read_key(&mut buf, &mut cur_key);
+            cur_key.raw_ref() < key.raw_ref()
         })
     }
 
-    pub fn get_first_key(&self) -> KeySlice<'_> {
-        self.get_entry(0).0
+    pub fn get_first_key(&self) -> KeyVec {
+        let mut key = KeyVec::new();
+        self.get_entry(0, &mut key);
+        key
     }
 
-    pub fn get_last_key(&self) -> KeySlice<'_> {
-        self.get_entry(self.count() - 1).0
+    pub fn get_last_key(&self) -> KeyVec {
+        let mut key = KeyVec::new();
+        self.get_entry(self.count() - 1, &mut key);
+        key
     }
 }

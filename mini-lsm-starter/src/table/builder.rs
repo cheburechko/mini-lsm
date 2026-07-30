@@ -59,8 +59,8 @@ impl SsTableBuilder {
         let block = builder.build();
         self.meta.push(BlockMeta {
             offset: self.data.len(),
-            first_key: block.get_first_key().to_key_vec().into_key_bytes(),
-            last_key: block.get_last_key().to_key_vec().into_key_bytes(),
+            first_key: block.get_first_key().into_key_bytes(),
+            last_key: block.get_last_key().into_key_bytes(),
         });
 
         self.data.extend(block.encode());

@@ -92,9 +92,7 @@ impl BlockIterator {
     fn seek(&mut self, idx: usize) {
         self.idx = idx;
 
-        let (key, value_range) = self.block.get_entry(idx);
-
-        self.key.set_from_slice(key);
+        let value_range = self.block.get_entry(idx, &mut self.key);
 
         self.value_range = value_range;
     }

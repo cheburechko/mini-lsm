@@ -93,7 +93,7 @@ impl Bloom {
         filter.resize(nbytes, 0);
 
         for mut key in keys.iter().copied() {
-            let delta = (key >> 17) | (key << 15);
+            let delta = key.rotate_left(15);
             for _ in 0..k {
                 filter.set_bit(key as usize % nbits, true);
                 key = key.wrapping_add(delta);
