@@ -325,8 +325,13 @@ impl LsmStorageInner {
                 .find_map(|memtable| memtable.get(key))
         });
         if result.is_none() {
-            let iter =
-                Self::create_sstable_merge_iter(state, Bound::Included(key), Bound::Included(key))?;
+            let hash = [farmhash::fingerprint32(key)];
+            let iter = Self::create_sstable_merge_iter(
+                state,
+                Bound::Included(key),
+                Bound::Included(key),
+                Some(&hash),
+            )?;
             if iter.is_valid() && iter.key() == KeySlice::from_slice(key) {
                 result.replace(Bytes::copy_from_slice(iter.value()));
             }
@@ -447,7 +452,7 @@ impl LsmStorageInner {
                 .collect(),
         );
 
-        let sstable_iter = Self::create_sstable_merge_iter(guard, lower, upper)?;
+        let sstable_iter = Self::create_sstable_merge_iter(guard, lower, upper, None)?;
 
         let mut iter = FusedIterator::new(LsmIterator::new(
             LsmIteratorInner::create(memtable_iter, sstable_iter)?,
@@ -463,10 +468,20 @@ impl LsmStorageInner {
         state: ReadLockGuard,
         lower: Bound<&[u8]>,
         upper: Bound<&[u8]>,
+        key_hashes: Option<&[u32]>,
     ) -> Result<MergeIterator<SsTableIterator>> {
         let mut tables = Vec::with_capacity(state.l0_sstables.len());
         for id in state.l0_sstables.iter() {
             let table = state.sstables.get(id).context("missing sstable")?;
+            if let Some(key_hashes) = key_hashes
+                && let Some(ref bloom) = table.bloom
+            {
+                for h in key_hashes {
+                    if !bloom.may_contain(*h) {
+                        continue;
+                    }
+                }
+            }
             if !Self::has_intersection(table, lower, upper) {
                 continue;
             }
