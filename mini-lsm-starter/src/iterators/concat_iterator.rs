@@ -32,7 +32,7 @@ pub struct SstConcatIterator {
 
 impl SstConcatIterator {
     pub fn create_and_seek_to_first(sstables: Vec<Arc<SsTable>>) -> Result<Self> {
-        let current = if let Some(table) = sstables.get(0) {
+        let current = if let Some(table) = sstables.first() {
             Some(SsTableIterator::create_and_seek_to_first(Arc::clone(
                 table,
             ))?)
