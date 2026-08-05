@@ -25,6 +25,7 @@ use crate::key::KeySlice;
 
 use super::StorageIterator;
 
+#[derive(Debug)]
 struct HeapWrapper<I: StorageIterator>(pub usize, pub Box<I>);
 
 impl<I: StorageIterator> PartialEq for HeapWrapper<I> {
@@ -53,6 +54,7 @@ impl<I: StorageIterator> Ord for HeapWrapper<I> {
 
 /// Merge multiple iterators of the same type. If the same key occurs multiple times in some
 /// iterators, prefer the one with smaller index.
+#[derive(Debug)]
 pub struct MergeIterator<I: StorageIterator> {
     iters: BinaryHeap<HeapWrapper<I>>,
     current: Option<HeapWrapper<I>>,

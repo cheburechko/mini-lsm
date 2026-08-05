@@ -409,10 +409,11 @@ impl LsmStorageInner {
         let mut builder = SsTableBuilder::new(self.options.block_size);
         memtable.flush(&mut builder)?;
 
-        let mut path = self.path.clone();
-        path.push(memtable.id().to_string());
-        let sstable =
-            Arc::from(builder.build(memtable.id(), Some(Arc::clone(&self.block_cache)), path)?);
+        let sstable = Arc::from(builder.build(
+            memtable.id(),
+            Some(Arc::clone(&self.block_cache)),
+            self.path_of_sst(memtable.id()),
+        )?);
 
         let state_lock = self.state_lock.lock();
         let mut guard = self.state.write();

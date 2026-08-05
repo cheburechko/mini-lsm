@@ -19,6 +19,7 @@ use crate::key::{KeySlice, KeyVec};
 use super::Block;
 
 /// Iterates on a block.
+#[derive(Debug)]
 pub struct BlockIterator {
     /// The internal `Block`, wrapped by an `Arc`
     block: Arc<Block>,

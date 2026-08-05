@@ -23,6 +23,7 @@ use super::SsTable;
 use crate::{block::BlockIterator, iterators::StorageIterator, key::KeySlice};
 
 /// An iterator over the contents of an SSTable.
+#[derive(Debug)]
 pub struct SsTableIterator {
     table: Arc<SsTable>,
     blk_iter: BlockIterator,
