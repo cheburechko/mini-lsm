@@ -31,7 +31,9 @@ use crate::compact::{
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
 use crate::iterators::StorageIterator;
+use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
+use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::key::KeySlice;
 use crate::lsm_iterator::{FusedIterator, LsmIterator, LsmIteratorInner};
 use crate::manifest::Manifest;
@@ -83,6 +85,12 @@ impl LsmStorageState {
             levels,
             sstables: Default::default(),
         }
+    }
+
+    pub fn get_sstables(&self, ids: &[usize]) -> Result<Vec<Arc<SsTable>>> {
+        ids.iter()
+            .map(|id| Ok(Arc::clone(self.sstables.get(id).context("missing id")?)))
+            .collect::<Result<Vec<_>>>()
     }
 }
 
@@ -470,28 +478,66 @@ impl LsmStorageInner {
         lower: Bound<&[u8]>,
         upper: Bound<&[u8]>,
         key_hashes: Option<&[u32]>,
-    ) -> Result<MergeIterator<SsTableIterator>> {
-        let mut tables = Vec::with_capacity(state.l0_sstables.len());
-        for id in state.l0_sstables.iter() {
-            let table = state.sstables.get(id).context("missing sstable")?;
+    ) -> Result<TwoMergeIterator<MergeIterator<SsTableIterator>, SstConcatIterator>> {
+        let mut l0_tables = Vec::with_capacity(state.l0_sstables.len());
+
+        let check_bloom_may_contain = |table: &Arc<SsTable>| {
             if let Some(key_hashes) = key_hashes
                 && let Some(ref bloom) = table.bloom
             {
                 for h in key_hashes {
                     if !bloom.may_contain(*h) {
-                        continue;
+                        return false;
                     }
                 }
+            };
+            true
+        };
+
+        for id in state.l0_sstables.iter() {
+            let table = state.sstables.get(id).context("missing sstable")?;
+
+            if !check_bloom_may_contain(table) {
+                continue;
             }
+
             if !Self::has_intersection(table, lower, upper) {
                 continue;
             }
-            tables.push(Arc::clone(table));
+            l0_tables.push(Arc::clone(table));
         }
+
+        let l1_tables = if let Some((_, ids)) = state.levels.first() {
+            let tables = state.get_sstables(ids)?;
+            let start_pos = match lower {
+                Bound::Excluded(key) | Bound::Included(key) => tables
+                    .partition_point(|table| table.first_key().raw_ref() <= key)
+                    .saturating_sub(1),
+                Bound::Unbounded => 0,
+            };
+            let end_pos = if lower == upper {
+                start_pos
+            } else {
+                match upper {
+                    Bound::Included(key) | Bound::Excluded(key) => {
+                        tables.partition_point(|table| table.last_key().raw_ref() <= key)
+                    }
+                    Bound::Unbounded => tables.len(),
+                }
+            };
+            tables
+                .into_iter()
+                .skip(start_pos)
+                .take(end_pos - start_pos + 1)
+                .filter(check_bloom_may_contain)
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         drop(state);
 
-        let create_sstable_iter = |table| -> Result<Box<SsTableIterator>> {
+        let create_l0_sstable_iter = |table| -> Result<Box<SsTableIterator>> {
             let iter = match lower {
                 Bound::Excluded(key) => {
                     let key = KeySlice::from_slice(key);
@@ -509,12 +555,29 @@ impl LsmStorageInner {
             Ok(Box::new(iter?))
         };
 
-        Ok(MergeIterator::create(
-            tables
+        let l0_iter = MergeIterator::create(
+            l0_tables
                 .into_iter()
-                .map(create_sstable_iter)
+                .map(create_l0_sstable_iter)
                 .collect::<Result<Vec<_>>>()?,
-        ))
+        );
+
+        let l1_iter = match lower {
+            Bound::Included(key) => {
+                SstConcatIterator::create_and_seek_to_key(l1_tables, KeySlice::from_slice(key))
+            }
+            Bound::Excluded(key) => {
+                let key = KeySlice::from_slice(key);
+                let mut iter = SstConcatIterator::create_and_seek_to_key(l1_tables, key)?;
+                if iter.is_valid() && iter.key() == key {
+                    iter.next()?;
+                }
+                Ok(iter)
+            }
+            Bound::Unbounded => SstConcatIterator::create_and_seek_to_first(l1_tables),
+        }?;
+
+        TwoMergeIterator::create(l0_iter, l1_iter)
     }
 
     fn has_intersection(table: &Arc<SsTable>, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> bool {

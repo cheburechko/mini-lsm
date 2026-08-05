@@ -31,7 +31,9 @@ pub use simple_leveled::{
 pub use tiered::{TieredCompactionController, TieredCompactionOptions, TieredCompactionTask};
 
 use crate::iterators::StorageIterator;
+use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
+use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
@@ -132,20 +134,23 @@ impl LsmStorageInner {
         } = task
         {
             let mut builder = SsTableBuilder::new(self.options.block_size);
-            let tables = {
-                let guard = self.state.read();
-                l0_sstables
-                    .iter()
-                    .chain(l1_sstables)
-                    .map(|id| Ok(Arc::clone(guard.sstables.get(id).context("missing id")?)))
-                    .collect::<Result<Vec<_>>>()
-            }?;
-            let mut iter = MergeIterator::create(
-                tables
+
+            let guard = self.state.read();
+
+            let l0_tables = guard.get_sstables(l0_sstables)?;
+            let l1_tables = guard.get_sstables(l1_sstables)?;
+
+            drop(guard);
+
+            let l0_iter = MergeIterator::create(
+                l0_tables
                     .into_iter()
                     .map(|table| Ok(Box::new(SsTableIterator::create_and_seek_to_first(table)?)))
                     .collect::<Result<Vec<_>>>()?,
             );
+            let l1_iter = SstConcatIterator::create_and_seek_to_first(l1_tables)?;
+            let mut iter = TwoMergeIterator::create(l0_iter, l1_iter)?;
+
             let mut result = Vec::with_capacity(l1_sstables.len());
 
             let mut build = |builder: SsTableBuilder| -> Result<SsTableBuilder> {
@@ -212,7 +217,7 @@ impl LsmStorageInner {
                         break;
                     }
                 }
-                if state.levels.len() > 0 {
+                if !state.levels.is_empty() {
                     state.levels[0].1 = l1_ids;
                 } else {
                     state.levels.push((1, l1_ids));
