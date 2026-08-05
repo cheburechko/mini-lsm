@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::key::{KeySlice, KeyVec};
+use crate::{
+    block::U16_SIZE,
+    key::{KeySlice, KeyVec},
+};
 use bytes::BufMut;
 
 use super::Block;
@@ -92,7 +95,11 @@ impl BlockBuilder {
         }
     }
 
+    pub fn get_estimated_size(&self) -> usize {
+        2 + self.offsets.len() * U16_SIZE + self.data.len()
+    }
+
     fn get_free_space(&self) -> usize {
-        self.block_size - 2 - self.offsets.len() * 2 - self.data.len()
+        self.block_size - self.get_estimated_size()
     }
 }
