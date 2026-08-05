@@ -249,15 +249,23 @@ impl Repl {
         self.bootstrap()?;
 
         loop {
-            let readline = self.editor.readline(&self.prompt)?;
-            if readline.trim().is_empty() {
-                // Skip noop
-                continue;
+            let result = self.process_line();
+            if let Err(e) = result {
+                println!("{}", e)
             }
-            let command = Command::parse(&readline)?;
-            self.handler.handle(&command)?;
-            self.editor.add_history_entry(readline)?;
         }
+    }
+
+    fn process_line(&mut self) -> Result<()> {
+        let readline = self.editor.readline(&self.prompt)?;
+        if readline.trim().is_empty() {
+            // Skip noop
+            return Ok(());
+        }
+        let command = Command::parse(&readline)?;
+        self.handler.handle(&command)?;
+        self.editor.add_history_entry(readline)?;
+        Ok(())
     }
 
     fn bootstrap(&mut self) -> Result<()> {

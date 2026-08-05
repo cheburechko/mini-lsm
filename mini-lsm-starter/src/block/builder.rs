@@ -62,7 +62,7 @@ impl BlockBuilder {
             self.first_key.set_from_slice(key);
         } else {
             let to_add = 6 + key.len() + value.len();
-            if to_add > self.get_free_space() {
+            if to_add + self.get_estimated_size() > self.block_size {
                 return false;
             }
         }
@@ -97,9 +97,5 @@ impl BlockBuilder {
 
     pub fn get_estimated_size(&self) -> usize {
         2 + self.offsets.len() * U16_SIZE + self.data.len()
-    }
-
-    fn get_free_space(&self) -> usize {
-        self.block_size - self.get_estimated_size()
     }
 }
