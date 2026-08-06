@@ -58,7 +58,7 @@ impl SimpleLeveledCompactionController {
                     .levels
                     .first()
                     .map(|(_, ids)| ids.clone())
-                    .unwrap_or_else(Vec::new),
+                    .unwrap_or_default(),
                 is_lower_level_bottom_level: self.options.max_levels == 1,
             });
         }
@@ -76,7 +76,7 @@ impl SimpleLeveledCompactionController {
                     lower_level: next_level,
                     lower_level_sst_ids: next_level_ids
                         .map(|(_, ids)| ids.clone())
-                        .unwrap_or_else(Vec::new),
+                        .unwrap_or_default(),
                     is_lower_level_bottom_level: next_level == self.options.max_levels,
                 });
             }
@@ -106,17 +106,19 @@ impl SimpleLeveledCompactionController {
             assert!(!task.upper_level_sst_ids.is_empty());
             for i in 0..snapshot.l0_sstables.len() {
                 if snapshot.l0_sstables[i] == *task.upper_level_sst_ids.first().unwrap() {
-                    snapshot.l0_sstables.resize(i, 0);
+                    snapshot.l0_sstables.truncate(i);
                     break;
                 }
             }
         }
 
         if let Some((level, ids)) = snapshot.levels.get_mut(task.lower_level - 1) {
+            assert_eq!(level, &task.lower_level);
             ids.clear();
             ids.extend_from_slice(output);
         } else {
             snapshot.levels.push((task.lower_level, Vec::from(output)));
+            assert_eq!(snapshot.levels.len(), task.lower_level);
         }
 
         let to_remove = task

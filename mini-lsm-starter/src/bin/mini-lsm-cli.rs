@@ -252,7 +252,7 @@ impl Repl {
         loop {
             let result = self.process_line();
             if let Err(ref e) = result {
-                if let Some(_) = e.downcast_ref::<ReadlineError>() {
+                if e.downcast_ref::<ReadlineError>().is_some() {
                     result?
                 } else {
                     println!("{:#}", e)

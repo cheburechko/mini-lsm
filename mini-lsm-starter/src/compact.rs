@@ -156,7 +156,7 @@ impl LsmStorageInner {
 
                 let lower_iter = SstConcatIterator::create_and_seek_to_first(lower)?;
 
-                if let Some(_) = task.upper_level {
+                if task.upper_level.is_some() {
                     self.build(
                         TwoMergeIterator::create(
                             SstConcatIterator::create_and_seek_to_first(upper)?,
@@ -286,20 +286,20 @@ impl LsmStorageInner {
             let tables = self.compact(&task)?;
 
             let to_remove = {
+                let output: Vec<_> = tables.iter().map(|table| table.sst_id()).collect();
+
                 let lock = self.state_lock.lock();
                 let mut guard = self.state.write();
-                let state = Arc::get_mut(&mut guard).context("failed to get state")?;
-                let output: Vec<_> = tables.iter().map(|table| table.sst_id()).collect();
                 let (mut new_state, to_remove) = self
                     .compaction_controller
-                    .apply_compaction_result(state, &task, output.as_ref(), false);
+                    .apply_compaction_result(guard.as_ref(), &task, output.as_ref(), false);
                 for table in tables {
                     new_state.sstables.insert(table.sst_id(), table);
                 }
                 for id in to_remove.iter() {
                     new_state.sstables.remove(id);
                 }
-                *state = new_state;
+                *guard = Arc::new(new_state);
                 to_remove
             };
 
