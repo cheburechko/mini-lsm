@@ -15,6 +15,7 @@
 mod wrapper;
 
 use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 use wrapper::mini_lsm_wrapper;
 
 use anyhow::Result;
@@ -250,8 +251,12 @@ impl Repl {
 
         loop {
             let result = self.process_line();
-            if let Err(e) = result {
-                println!("{}", e)
+            if let Err(ref e) = result {
+                if let Some(_) = e.downcast_ref::<ReadlineError>() {
+                    result?
+                } else {
+                    println!("{:#}", e)
+                }
             }
         }
     }
