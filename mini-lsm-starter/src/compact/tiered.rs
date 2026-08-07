@@ -42,17 +42,78 @@ impl TieredCompactionController {
 
     pub fn generate_compaction_task(
         &self,
-        _snapshot: &LsmStorageState,
+        snapshot: &LsmStorageState,
     ) -> Option<TieredCompactionTask> {
-        unimplemented!()
+        if snapshot.levels.len() < self.options.num_tiers {
+            return None;
+        }
+        let total_size: usize = snapshot.levels.iter().map(|(_, ids)| ids.len()).sum();
+        let last_size = snapshot.levels.last().map_or(0, |(_, ids)| ids.len());
+        if last_size * self.options.max_size_amplification_percent <= (total_size - last_size) * 100
+        {
+            return Some(TieredCompactionTask {
+                tiers: snapshot.levels.clone(),
+                bottom_tier_included: true,
+            });
+        }
+        let mut cum_size: usize = snapshot
+            .levels
+            .iter()
+            .take(self.options.min_merge_width)
+            .map(|(_, ids)| ids.len())
+            .sum();
+        for i in self.options.min_merge_width..snapshot.levels.len() {
+            let (level, ids) = snapshot.levels.get(i).unwrap();
+            if ids.len() * 100 > cum_size * (100 + self.options.size_ratio) {
+                return Some(TieredCompactionTask {
+                    tiers: snapshot.levels.iter().take(i).cloned().collect(),
+                    bottom_tier_included: false,
+                });
+            }
+            cum_size += ids.len()
+        }
+        if let Some(width) = self.options.max_merge_width {
+            Some(TieredCompactionTask{
+                tiers: snapshot.levels.iter().take(width).cloned().collect(),
+                bottom_tier_included: width >= snapshot.levels.len(),
+            })
+        } else {
+            Some(TieredCompactionTask{
+                tiers: snapshot.levels.clone(),
+                bottom_tier_included: true,
+            })
+        }
     }
 
     pub fn apply_compaction_result(
         &self,
-        _snapshot: &LsmStorageState,
-        _task: &TieredCompactionTask,
-        _output: &[usize],
+        snapshot: &LsmStorageState,
+        task: &TieredCompactionTask,
+        output: &[usize],
     ) -> (LsmStorageState, Vec<usize>) {
-        unimplemented!()
+        assert!(!task.tiers.is_empty());
+        let mut snapshot = snapshot.clone();
+        let new_level = task.tiers.first().unwrap().0 + 1;
+        println!("{:#?}", snapshot.levels);
+
+        if task.bottom_tier_included {
+            snapshot.levels.clear();
+            snapshot
+                .levels
+                .push((new_level, Vec::from(output)));
+        } else {
+            snapshot.levels.drain(0..task.tiers.len()-1);
+            *snapshot.levels.first_mut().unwrap() = (new_level, Vec::from(output));
+        }
+        println!("{:#?}", snapshot.levels);
+
+        let to_remove = task
+            .tiers
+            .iter()
+            .map(|(_, ids)| ids)
+            .flatten()
+            .copied()
+            .collect();
+        (snapshot, to_remove)
     }
 }
