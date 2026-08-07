@@ -171,6 +171,28 @@ impl LsmStorageInner {
                     )
                 }
             }
+            CompactionTask::Tiered(task) => {
+                let tiers = {
+                    let guard = self.state.read();
+                    task.tiers
+                        .iter()
+                        .map(|(_, ids)| guard.get_sstables(ids.as_slice()))
+                        .collect::<Result<Vec<_>>>()
+                }?;
+
+                let iter = MergeIterator::create(
+                    tiers
+                        .into_iter()
+                        .map(|tables| {
+                            Ok(Box::new(SstConcatIterator::create_and_seek_to_first(
+                                tables,
+                            )?))
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                );
+
+                self.build(iter, task.bottom_tier_included)
+            }
             _ => Err(anyhow::anyhow!("task not implemented: {:?}", task)),
         }
     }

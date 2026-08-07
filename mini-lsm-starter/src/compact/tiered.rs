@@ -73,12 +73,12 @@ impl TieredCompactionController {
             cum_size += ids.len()
         }
         if let Some(width) = self.options.max_merge_width {
-            Some(TieredCompactionTask{
+            Some(TieredCompactionTask {
                 tiers: snapshot.levels.iter().take(width).cloned().collect(),
                 bottom_tier_included: width >= snapshot.levels.len(),
             })
         } else {
-            Some(TieredCompactionTask{
+            Some(TieredCompactionTask {
                 tiers: snapshot.levels.clone(),
                 bottom_tier_included: true,
             })
@@ -93,25 +93,21 @@ impl TieredCompactionController {
     ) -> (LsmStorageState, Vec<usize>) {
         assert!(!task.tiers.is_empty());
         let mut snapshot = snapshot.clone();
-        let new_level = task.tiers.first().unwrap().0 + 1;
-        println!("{:#?}", snapshot.levels);
 
-        if task.bottom_tier_included {
-            snapshot.levels.clear();
-            snapshot
-                .levels
-                .push((new_level, Vec::from(output)));
-        } else {
-            snapshot.levels.drain(0..task.tiers.len()-1);
-            *snapshot.levels.first_mut().unwrap() = (new_level, Vec::from(output));
+        let mut start = 0;
+        for i in 0..snapshot.levels.len() {
+            if snapshot.levels.get(i).unwrap().0 == task.tiers.first().unwrap().0 {
+                start = i;
+            }
         }
-        println!("{:#?}", snapshot.levels);
+
+        snapshot.levels.drain(start..start + task.tiers.len() - 1);
+        *snapshot.levels.get_mut(start).unwrap() = (*output.first().unwrap(), Vec::from(output));
 
         let to_remove = task
             .tiers
             .iter()
-            .map(|(_, ids)| ids)
-            .flatten()
+            .flat_map(|(_, ids)| ids)
             .copied()
             .collect();
         (snapshot, to_remove)

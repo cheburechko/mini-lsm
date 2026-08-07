@@ -435,7 +435,13 @@ impl LsmStorageInner {
         }
 
         state.imm_memtables.pop();
-        state.l0_sstables.insert(0, memtable.id());
+        if self.compaction_controller.flush_to_l0() {
+            state.l0_sstables.insert(0, memtable.id());
+        } else {
+            state
+                .levels
+                .insert(0, (memtable.id(), Vec::from([memtable.id()])));
+        }
         state.sstables.insert(memtable.id(), sstable);
 
         Ok(())
