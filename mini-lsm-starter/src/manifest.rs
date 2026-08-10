@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
-use std::fs::File;
+use std::io::BufReader;
+use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
+use std::{fs::File, io::Write};
 
 use anyhow::Result;
 use parking_lot::{Mutex, MutexGuard};
@@ -37,12 +36,25 @@ pub enum ManifestRecord {
 }
 
 impl Manifest {
-    pub fn create(_path: impl AsRef<Path>) -> Result<Self> {
-        unimplemented!()
+    pub fn create(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(Self {
+            file: Arc::new(Mutex::new(File::create(path)?)),
+        })
     }
 
-    pub fn recover(_path: impl AsRef<Path>) -> Result<(Self, Vec<ManifestRecord>)> {
-        unimplemented!()
+    pub fn recover(path: impl AsRef<Path>) -> Result<(Self, Vec<ManifestRecord>)> {
+        let result = Self {
+            file: Arc::new(Mutex::new(File::open(path)?)),
+        };
+        let mut manifest = Vec::new();
+        {
+            let file = result.file.lock();
+            let mut deser = serde_json::Deserializer::from_reader(BufReader::new(file.deref()));
+            while let Ok(record) = ManifestRecord::deserialize(&mut deser) {
+                manifest.push(record);
+            }
+        }
+        Ok((result, manifest))
     }
 
     pub fn add_record(
@@ -53,7 +65,9 @@ impl Manifest {
         self.add_record_when_init(record)
     }
 
-    pub fn add_record_when_init(&self, _record: ManifestRecord) -> Result<()> {
-        unimplemented!()
+    pub fn add_record_when_init(&self, record: ManifestRecord) -> Result<()> {
+        let mut file = self.file.lock();
+        file.write(serde_json::to_vec(&record)?.as_slice())?;
+        Ok(())
     }
 }
