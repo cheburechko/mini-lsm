@@ -193,6 +193,15 @@ impl MiniLsm {
         if let Some(thread) = self.compaction_thread.lock().take() {
             thread.join().map_err(|err| anyhow!("{:?}", err))?;
         }
+        if !self.inner.options.enable_wal {
+            if !self.inner.state.read().memtable.is_empty() {
+                self.inner
+                    .force_freeze_memtable(&self.inner.state_lock.lock())?;
+            }
+            while self.inner.state.read().imm_memtables.is_empty() {
+                self.inner.force_flush_next_imm_memtable()?;
+            }
+        }
         Ok(())
     }
 
