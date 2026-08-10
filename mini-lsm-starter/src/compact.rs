@@ -36,6 +36,8 @@ use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::key::Key;
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
+use crate::manifest;
+use crate::manifest::ManifestRecord::Compaction;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -261,6 +263,8 @@ impl LsmStorageInner {
             build(builder)?;
         }
 
+        self.sync_dir()?;
+
         Ok(result)
     }
 
@@ -281,7 +285,7 @@ impl LsmStorageInner {
             }
         };
         let l1 = self.compact(&task)?;
-        let l1_ids = l1.iter().map(|table| table.sst_id()).collect();
+        let l1_ids: Vec<usize> = l1.iter().map(|table| table.sst_id()).collect();
 
         if let CompactionTask::ForceFullCompaction {
             l0_sstables,
@@ -290,6 +294,20 @@ impl LsmStorageInner {
         {
             {
                 let lock = self.state_lock.lock();
+
+                if let Some(ref manifest) = self.manifest {
+                    manifest.add_record(
+                        &lock,
+                        Compaction(
+                            CompactionTask::ForceFullCompaction {
+                                l0_sstables: l0_sstables.clone(),
+                                l1_sstables: l1_sstables.clone(),
+                            },
+                            l1_ids.clone(),
+                        ),
+                    )?;
+                }
+
                 let mut guard = self.state.write();
                 let state = Arc::get_mut(&mut guard).context("failed to get state")?;
 
@@ -312,9 +330,7 @@ impl LsmStorageInner {
                     state.sstables.insert(table.sst_id(), table);
                 }
             }
-            for id in l0_sstables.into_iter().chain(l1_sstables) {
-                std::fs::remove_file(self.path_of_sst(id))?;
-            }
+            self.remove_files(l0_sstables.into_iter().chain(l1_sstables))?;
             Ok(())
         } else {
             unreachable!();
@@ -343,14 +359,25 @@ impl LsmStorageInner {
                     new_state.sstables.remove(id);
                 }
                 *self.state.write() = Arc::new(new_state);
+
+                if let Some(ref manifest) = self.manifest {
+                    manifest
+                        .add_record(&lock, manifest::ManifestRecord::Compaction(task, output))?;
+                }
+
                 to_remove
             };
-
-            for id in to_remove {
-                std::fs::remove_file(self.path_of_sst(id))?;
-            }
+            self.remove_files(to_remove.into_iter())?;
         }
         Ok(())
+    }
+
+    fn remove_files<I: Iterator<Item = usize>>(&self, to_remove: I) -> Result<()> {
+        for id in to_remove {
+            std::fs::remove_file(self.path_of_sst(id))?;
+        }
+
+        self.sync_dir()
     }
 
     pub(crate) fn spawn_compaction_thread(

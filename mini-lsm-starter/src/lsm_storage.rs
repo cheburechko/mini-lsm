@@ -16,6 +16,7 @@
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -36,7 +37,7 @@ use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::key::KeySlice;
 use crate::lsm_iterator::{FusedIterator, LsmIterator, LsmIteratorInner};
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, ManifestRecord};
 use crate::mem_table::{MemTable, map_bound};
 use crate::mvcc::LsmMvccInner;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
@@ -388,7 +389,8 @@ impl LsmStorageInner {
     }
 
     pub(super) fn sync_dir(&self) -> Result<()> {
-        unimplemented!()
+        File::open(&self.path)?.sync_all()?;
+        Ok(())
     }
 
     /// Force freeze the current memtable to an immutable memtable
@@ -422,8 +424,14 @@ impl LsmStorageInner {
             Some(Arc::clone(&self.block_cache)),
             self.path_of_sst(memtable.id()),
         )?);
+        self.sync_dir()?;
 
         let state_lock = self.state_lock.lock();
+
+        if let Some(ref manifest) = self.manifest {
+            manifest.add_record(&state_lock, ManifestRecord::Flush(memtable.id()))?;
+        }
+
         let mut guard = self.state.write();
         let state = Arc::get_mut(&mut guard).context("failed to get state")?;
         if state
