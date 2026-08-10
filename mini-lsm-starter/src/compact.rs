@@ -193,7 +193,31 @@ impl LsmStorageInner {
 
                 self.build(iter, task.bottom_tier_included)
             }
-            _ => Err(anyhow::anyhow!("task not implemented: {:?}", task)),
+            CompactionTask::Leveled(task) => {
+                let guard = self.state.read();
+
+                let upper = guard.get_sstables(&task.upper_level_sst_ids)?;
+                let lower = guard.get_sstables(&task.lower_level_sst_ids)?;
+
+                drop(guard);
+
+                let lower_iter = SstConcatIterator::create_and_seek_to_first(lower)?;
+
+                if task.upper_level.is_some() {
+                    self.build(
+                        TwoMergeIterator::create(
+                            SstConcatIterator::create_and_seek_to_first(upper)?,
+                            lower_iter,
+                        )?,
+                        task.is_lower_level_bottom_level,
+                    )
+                } else {
+                    self.build(
+                        TwoMergeIterator::create(Self::create_l0_iter(upper)?, lower_iter)?,
+                        task.is_lower_level_bottom_level,
+                    )
+                }
+            }
         }
     }
 
@@ -233,7 +257,7 @@ impl LsmStorageInner {
             }
             iter.next()?;
         }
-        if builder.estimated_size() > 0 {
+        if !builder.is_empty() {
             build(builder)?;
         }
 
@@ -298,31 +322,27 @@ impl LsmStorageInner {
     }
 
     fn trigger_compaction(&self) -> Result<()> {
-        let task = {
+        if let Some(task) = {
             let guard = self.state.read();
             self.compaction_controller
                 .generate_compaction_task(guard.as_ref())
-        };
-
-        if let Some(task) = task {
+        } {
             let tables = self.compact(&task)?;
+            let output: Vec<_> = tables.iter().map(|table| table.sst_id()).collect();
 
             let to_remove = {
-                let output: Vec<_> = tables.iter().map(|table| table.sst_id()).collect();
-
                 let lock = self.state_lock.lock();
-                let mut guard = self.state.write();
-                let mut snapshot = guard.as_ref().clone();
+                let mut snapshot = self.state.read().as_ref().clone();
                 for table in tables {
                     snapshot.sstables.insert(table.sst_id(), table);
                 }
                 let (mut new_state, to_remove) = self
                     .compaction_controller
-                    .apply_compaction_result(guard.as_ref(), &task, output.as_ref(), false);
+                    .apply_compaction_result(&snapshot, &task, output.as_ref(), false);
                 for id in to_remove.iter() {
                     new_state.sstables.remove(id);
                 }
-                *guard = Arc::new(new_state);
+                *self.state.write() = Arc::new(new_state);
                 to_remove
             };
 

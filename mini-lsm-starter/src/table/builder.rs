@@ -86,6 +86,10 @@ impl SsTableBuilder {
         self.data.len() + self.builder.get_estimated_size()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty() && self.builder.is_empty()
+    }
+
     /// Builds the SSTable and writes it to the given path. Use the `FileObject` structure to manipulate the disk objects.
     pub fn build(
         #[allow(unused_mut)] mut self,
@@ -93,7 +97,9 @@ impl SsTableBuilder {
         block_cache: Option<Arc<BlockCache>>,
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
-        self.finalize_block();
+        if !self.builder.is_empty() {
+            self.finalize_block();
+        }
 
         let meta_offset = self.data.len();
         BlockMeta::encode_block_meta(self.meta.as_slice(), &mut self.data);

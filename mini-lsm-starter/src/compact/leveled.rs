@@ -120,7 +120,11 @@ impl LeveledCompactionController {
                 upper_level: None,
                 upper_level_sst_ids: snapshot.l0_sstables.clone(),
                 lower_level: level,
-                lower_level_sst_ids: self.find_overlapping_ssts(snapshot, snapshot.l0_sstables.as_slice(), level),
+                lower_level_sst_ids: self.find_overlapping_ssts(
+                    snapshot,
+                    snapshot.l0_sstables.as_slice(),
+                    level,
+                ),
                 is_lower_level_bottom_level: level == self.options.max_levels,
             });
         }
@@ -155,9 +159,9 @@ impl LeveledCompactionController {
                 self.find_overlapping_ssts(snapshot, upper_level_sst_ids.as_slice(), max_level + 1);
             return Some(LeveledCompactionTask {
                 upper_level: Some(max_level),
-                upper_level_sst_ids: upper_level_sst_ids,
+                upper_level_sst_ids,
                 lower_level: max_level + 1,
-                lower_level_sst_ids: lower_level_sst_ids,
+                lower_level_sst_ids,
                 is_lower_level_bottom_level: max_level + 1 == self.options.max_levels,
             });
         }
@@ -218,8 +222,7 @@ impl LeveledCompactionController {
                     ids.partition_point(|id| snapshot.sstables.get(id).unwrap().last_key() < lower);
                 if pos == ids.len() { None } else { Some(pos) }
             };
-            end = ids
-                .partition_point(|id| snapshot.sstables.get(id).unwrap().first_key() < upper)
+            end = ids.partition_point(|id| snapshot.sstables.get(id).unwrap().first_key() < upper)
         }
 
         if let Some(start) = start {
