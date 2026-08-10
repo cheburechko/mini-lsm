@@ -21,6 +21,9 @@ serde = { version = "1", features = ["derive"] }
 farmhash = "1"
 nom = "8"
 rustyline = "17"
+log = "0.4.33"
+simple_logger = "5.2.0"
+test-log = "0.2.21"
 
 [dev-dependencies]
 tempfile = "3"
