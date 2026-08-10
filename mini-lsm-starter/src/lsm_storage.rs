@@ -508,7 +508,7 @@ impl LsmStorageInner {
                 continue;
             }
 
-            if !Self::has_intersection(table, lower, upper) {
+            if !has_intersection(table, lower, upper) {
                 continue;
             }
             l0_tables.push(Arc::clone(table));
@@ -599,34 +599,38 @@ impl LsmStorageInner {
 
         TwoMergeIterator::create(l0_iter, ln_iter)
     }
+}
 
-    fn has_intersection(table: &Arc<SsTable>, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> bool {
-        match lower {
-            Bound::Excluded(bound) => {
-                if table.last_key().raw_ref() <= bound {
-                    return false;
-                }
+pub(crate) fn has_intersection(
+    table: &Arc<SsTable>,
+    lower: Bound<&[u8]>,
+    upper: Bound<&[u8]>,
+) -> bool {
+    match lower {
+        Bound::Excluded(bound) => {
+            if table.last_key().raw_ref() <= bound {
+                return false;
             }
-            Bound::Included(bound) => {
-                if table.last_key().raw_ref() < bound {
-                    return false;
-                }
-            }
-            Bound::Unbounded => (),
         }
-        match upper {
-            Bound::Excluded(bound) => {
-                if table.first_key().raw_ref() >= bound {
-                    return false;
-                }
+        Bound::Included(bound) => {
+            if table.last_key().raw_ref() < bound {
+                return false;
             }
-            Bound::Included(bound) => {
-                if table.first_key().raw_ref() > bound {
-                    return false;
-                }
-            }
-            Bound::Unbounded => (),
         }
-        true
+        Bound::Unbounded => (),
     }
+    match upper {
+        Bound::Excluded(bound) => {
+            if table.first_key().raw_ref() >= bound {
+                return false;
+            }
+        }
+        Bound::Included(bound) => {
+            if table.first_key().raw_ref() > bound {
+                return false;
+            }
+        }
+        Bound::Unbounded => (),
+    }
+    true
 }

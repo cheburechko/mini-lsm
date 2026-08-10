@@ -312,12 +312,13 @@ impl LsmStorageInner {
 
                 let lock = self.state_lock.lock();
                 let mut guard = self.state.write();
+                let mut snapshot = guard.as_ref().clone();
+                for table in tables {
+                    snapshot.sstables.insert(table.sst_id(), table);
+                }
                 let (mut new_state, to_remove) = self
                     .compaction_controller
                     .apply_compaction_result(guard.as_ref(), &task, output.as_ref(), false);
-                for table in tables {
-                    new_state.sstables.insert(table.sst_id(), table);
-                }
                 for id in to_remove.iter() {
                     new_state.sstables.remove(id);
                 }
