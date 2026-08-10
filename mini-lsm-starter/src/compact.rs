@@ -308,8 +308,7 @@ impl LsmStorageInner {
                     )?;
                 }
 
-                let mut guard = self.state.write();
-                let state = Arc::get_mut(&mut guard).context("failed to get state")?;
+                let mut state = self.state.read().as_ref().clone();
 
                 for i in 0..state.l0_sstables.len() {
                     if state.l0_sstables.get(i) == l0_sstables.first() {
@@ -329,6 +328,8 @@ impl LsmStorageInner {
                 for table in l1 {
                     state.sstables.insert(table.sst_id(), table);
                 }
+
+                *self.state.write() = Arc::new(state);
             }
             self.remove_files(l0_sstables.into_iter().chain(l1_sstables))?;
             Ok(())

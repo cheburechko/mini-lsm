@@ -198,7 +198,7 @@ impl MiniLsm {
                 self.inner
                     .force_freeze_memtable(&self.inner.state_lock.lock())?;
             }
-            while self.inner.state.read().imm_memtables.is_empty() {
+            while !self.inner.state.read().imm_memtables.is_empty() {
                 self.inner.force_flush_next_imm_memtable()?;
             }
         }
@@ -406,10 +406,10 @@ impl LsmStorageInner {
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
         let memtable = MemTable::create(self.next_sst_id());
         {
-            let mut guard = self.state.write();
-            let state = Arc::get_mut(&mut guard).context("Failed to get state")?;
+            let mut state = self.state.read().as_ref().clone();
             state.imm_memtables.insert(0, state.memtable.clone());
             state.memtable = Arc::new(memtable);
+            *self.state.write() = Arc::new(state);
         }
         Ok(())
     }
@@ -441,8 +441,7 @@ impl LsmStorageInner {
             manifest.add_record(&state_lock, ManifestRecord::Flush(memtable.id()))?;
         }
 
-        let mut guard = self.state.write();
-        let state = Arc::get_mut(&mut guard).context("failed to get state")?;
+        let mut state = self.state.read().as_ref().clone();
         if state
             .imm_memtables
             .last()
@@ -460,6 +459,8 @@ impl LsmStorageInner {
                 .insert(0, (memtable.id(), Vec::from([memtable.id()])));
         }
         state.sstables.insert(memtable.id(), sstable);
+
+        *self.state.write() = Arc::new(state);
 
         Ok(())
     }
