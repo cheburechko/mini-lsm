@@ -16,11 +16,12 @@
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 use anyhow::Result;
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes};
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
-use std::fs::File;
-use std::io::BufWriter;
+use std::fs::{File, OpenOptions};
+use std::io::ErrorKind::UnexpectedEof;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -31,16 +32,57 @@ pub struct Wal {
 }
 
 impl Wal {
-    pub fn create(_path: impl AsRef<Path>) -> Result<Self> {
-        unimplemented!()
+    pub fn create(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(Self {
+            file: Arc::new(Mutex::new(BufWriter::new(File::create_new(path)?))),
+        })
     }
 
-    pub fn recover(_path: impl AsRef<Path>, _skiplist: &SkipMap<Bytes, Bytes>) -> Result<Self> {
-        unimplemented!()
+    pub fn recover(path: impl AsRef<Path>, skiplist: &SkipMap<Bytes, Bytes>) -> Result<Self> {
+        let mut reader = BufReader::new(File::open(&path)?);
+
+        loop {
+            let key = Self::read(&mut reader);
+            if key.is_err() {
+                if key.as_ref().unwrap_err().kind() == UnexpectedEof {
+                    break;
+                }
+            }
+            let value = Self::read(&mut reader)?;
+            skiplist.insert(key?, value);
+        }
+
+        Ok(Self {
+            file: Arc::new(Mutex::new(BufWriter::new(
+                OpenOptions::new().append(true).open(path)?,
+            ))),
+        })
     }
 
-    pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn read(reader: &mut BufReader<File>) -> Result<Bytes, std::io::Error> {
+        let mut len = [0u8; 2];
+        let mut buf = Vec::new();
+
+        reader.read_exact(len.as_mut_slice())?;
+        buf.resize(len.as_slice().get_u16() as usize, 0);
+        reader.read_exact(buf.as_mut_slice())?;
+        Ok(Bytes::from(buf))
+    }
+
+    fn write(writer: &mut BufWriter<File>, value: &[u8]) -> Result<()> {
+        let mut len = [0u8; 2];
+
+        len.as_mut_slice().put_u16(value.len() as u16);
+        writer.write_all(len.as_slice())?;
+        writer.write_all(value)?;
+        Ok(())
+    }
+
+    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        let mut lock = self.file.lock();
+        Self::write(lock.by_ref(), key)?;
+        Self::write(lock.by_ref(), value)?;
+        Ok(())
     }
 
     /// Implement this in week 3, day 5; if you want to implement this earlier, use `&[u8]` as the key type.
@@ -49,6 +91,9 @@ impl Wal {
     }
 
     pub fn sync(&self) -> Result<()> {
-        unimplemented!()
+        let mut lock = self.file.lock();
+        lock.flush()?;
+        lock.get_mut().sync_all()?;
+        Ok(())
     }
 }
