@@ -28,7 +28,7 @@ pub struct Manifest {
     file: Arc<Mutex<File>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum ManifestRecord {
     Flush(usize),
     NewMemtable(usize),
@@ -67,7 +67,7 @@ impl Manifest {
 
     pub fn add_record_when_init(&self, record: ManifestRecord) -> Result<()> {
         let mut file = self.file.lock();
-        file.write(serde_json::to_vec(&record)?.as_slice())?;
+        file.write_all(serde_json::to_vec(&record)?.as_slice())?;
         Ok(())
     }
 }
