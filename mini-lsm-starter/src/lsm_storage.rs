@@ -21,6 +21,7 @@ use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::Relaxed;
 
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
@@ -355,6 +356,7 @@ impl LsmStorageInner {
             .flat_map(|(_, ids)| ids)
             .chain(snapshot.l0_sstables.iter())
             .copied();
+        let mut max_id = self.next_sst_id.load(Relaxed);
         for id in ids {
             snapshot.sstables.insert(
                 id,
@@ -364,6 +366,7 @@ impl LsmStorageInner {
                     FileObject::open(&self.path_of_sst(id))?,
                 )?),
             );
+            max_id = max_id.max(id);
         }
 
         for (_, ids) in snapshot.levels.iter_mut() {
@@ -371,6 +374,7 @@ impl LsmStorageInner {
         }
 
         *self.state.write() = Arc::new(snapshot);
+        self.next_sst_id.store(max_id + 1, Relaxed);
         Ok(())
     }
 
