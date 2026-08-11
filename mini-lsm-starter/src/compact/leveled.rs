@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 
 use serde::{Deserialize, Serialize};
@@ -174,26 +176,9 @@ impl LeveledCompactionController {
         snapshot: &LsmStorageState,
         task: &LeveledCompactionTask,
         output: &[usize],
-        _in_recovery: bool,
+        in_recovery: bool,
     ) -> (LsmStorageState, Vec<usize>) {
         let mut snapshot = snapshot.clone();
-
-        if let Some(upper_level) = task.upper_level {
-            let (level, ids) = snapshot.levels.get_mut(upper_level - 1).unwrap();
-            assert_eq!(*level, upper_level);
-            assert_eq!(task.upper_level_sst_ids.len(), 1);
-            let upper_level_sst_id = task.upper_level_sst_ids.first().unwrap();
-            ids.retain(|id| id != upper_level_sst_id);
-        } else {
-            let id = *task.upper_level_sst_ids.first().unwrap();
-
-            for i in 0..snapshot.l0_sstables.len() {
-                if snapshot.l0_sstables[i] == id {
-                    snapshot.l0_sstables.truncate(i);
-                    break;
-                }
-            }
-        }
 
         while snapshot.levels.len() < self.options.max_levels {
             snapshot
@@ -201,42 +186,79 @@ impl LeveledCompactionController {
                 .push((snapshot.levels.len() + 1, Vec::new()));
         }
 
-        let (level, ids) = snapshot.levels.get_mut(task.lower_level - 1).unwrap();
-        assert_eq!(level, &task.lower_level);
-        let before = ids.len();
-        let mut start = None;
-        let mut end = 0;
-        if !ids.is_empty() {
-            let lower = snapshot
-                .sstables
-                .get(output.first().unwrap())
-                .unwrap()
-                .first_key();
-            let upper = snapshot
-                .sstables
-                .get(output.last().unwrap())
-                .unwrap()
-                .last_key();
-            start = {
-                let pos =
-                    ids.partition_point(|id| snapshot.sstables.get(id).unwrap().last_key() < lower);
-                if pos == ids.len() { None } else { Some(pos) }
-            };
-            end = ids.partition_point(|id| snapshot.sstables.get(id).unwrap().first_key() < upper)
-        }
-
-        if let Some(start) = start {
-            ids.splice(start..end, output.iter().copied());
-        } else {
-            ids.extend_from_slice(output);
-        }
-
-        let to_remove = task
+        let to_remove: Vec<usize> = task
             .lower_level_sst_ids
             .iter()
             .chain(task.upper_level_sst_ids.iter())
             .copied()
             .collect();
+
+        if in_recovery {
+            let mut to_remove_set: HashSet<usize> = to_remove.iter().copied().collect();
+            let ids = if let Some(level) = task.upper_level {
+                &mut snapshot.levels.get_mut(level - 1).unwrap().1
+            } else {
+                &mut snapshot.l0_sstables
+            };
+            ids.retain(|id| !to_remove_set.remove(id));
+
+            let ids = &mut snapshot.levels.get_mut(task.lower_level - 1).unwrap().1;
+            ids.retain(|id| !to_remove_set.remove(id));
+
+            assert!(to_remove_set.is_empty());
+
+            ids.extend_from_slice(output);
+        } else {
+            if let Some(upper_level) = task.upper_level {
+                let (level, ids) = snapshot.levels.get_mut(upper_level - 1).unwrap();
+                assert_eq!(*level, upper_level);
+                assert_eq!(task.upper_level_sst_ids.len(), 1);
+                let upper_level_sst_id = task.upper_level_sst_ids.first().unwrap();
+                ids.retain(|id| id != upper_level_sst_id);
+            } else {
+                let id = *task.upper_level_sst_ids.first().unwrap();
+
+                for i in 0..snapshot.l0_sstables.len() {
+                    if snapshot.l0_sstables[i] == id {
+                        snapshot.l0_sstables.truncate(i);
+                        break;
+                    }
+                }
+            }
+
+            let (level, ids) = snapshot.levels.get_mut(task.lower_level - 1).unwrap();
+            assert_eq!(level, &task.lower_level);
+            let before = ids.len();
+            let mut start = None;
+            let mut end = 0;
+            if !ids.is_empty() {
+                let lower = snapshot
+                    .sstables
+                    .get(output.first().unwrap())
+                    .unwrap()
+                    .first_key();
+                let upper = snapshot
+                    .sstables
+                    .get(output.last().unwrap())
+                    .unwrap()
+                    .last_key();
+                start = {
+                    let pos = ids.partition_point(|id| {
+                        snapshot.sstables.get(id).unwrap().last_key() < lower
+                    });
+                    if pos == ids.len() { None } else { Some(pos) }
+                };
+                end =
+                    ids.partition_point(|id| snapshot.sstables.get(id).unwrap().first_key() < upper)
+            }
+
+            if let Some(start) = start {
+                ids.splice(start..end, output.iter().copied());
+            } else {
+                ids.extend_from_slice(output);
+            }
+        }
+
         (snapshot, to_remove)
     }
 }

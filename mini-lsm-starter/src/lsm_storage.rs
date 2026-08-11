@@ -40,7 +40,7 @@ use crate::lsm_iterator::{FusedIterator, LsmIterator, LsmIteratorInner};
 use crate::manifest::{Manifest, ManifestRecord};
 use crate::mem_table::{MemTable, map_bound};
 use crate::mvcc::LsmMvccInner;
-use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
+use crate::table::{FileObject, SsTable, SsTableBuilder, SsTableIterator};
 
 type ReadLockGuard<'a> =
     parking_lot::lock_api::RwLockReadGuard<'a, parking_lot::RawRwLock, Arc<LsmStorageState>>;
@@ -307,6 +307,13 @@ impl LsmStorageInner {
             CompactionOptions::NoCompaction => CompactionController::NoCompaction,
         };
 
+        let manifest_path = path.join("MANIFEST");
+        let (manifest, records) = if manifest_path.exists() {
+            Manifest::recover(manifest_path)
+        } else {
+            Ok((Manifest::create(manifest_path)?, Vec::new()))
+        }?;
+
         let storage = Self {
             state: Arc::new(RwLock::new(Arc::new(state))),
             state_lock: Mutex::new(()),
@@ -314,13 +321,57 @@ impl LsmStorageInner {
             block_cache: Arc::new(BlockCache::new(1024)),
             next_sst_id: AtomicUsize::new(1),
             compaction_controller,
-            manifest: None,
+            manifest: Some(manifest),
             options: options.into(),
             mvcc: None,
             compaction_filters: Arc::new(Mutex::new(Vec::new())),
         };
 
+        storage.replay_manifest_records(records)?;
+
         Ok(storage)
+    }
+
+    fn replay_manifest_records(&self, records: Vec<ManifestRecord>) -> Result<()> {
+        let mut snapshot = self.state.read().as_ref().clone();
+
+        for record in records {
+            match record {
+                ManifestRecord::Flush(id) => {
+                    self.push_sstable(&mut snapshot, id);
+                }
+                ManifestRecord::NewMemtable(_) => todo!(),
+                ManifestRecord::Compaction(task, items) => {
+                    (snapshot, _) = self
+                        .compaction_controller
+                        .apply_compaction_result(&snapshot, &task, &items, true);
+                }
+            }
+        }
+
+        let ids = snapshot
+            .levels
+            .iter()
+            .flat_map(|(_, ids)| ids)
+            .chain(snapshot.l0_sstables.iter())
+            .copied();
+        for id in ids {
+            snapshot.sstables.insert(
+                id,
+                Arc::new(SsTable::open(
+                    id,
+                    None,
+                    FileObject::open(&self.path_of_sst(id))?,
+                )?),
+            );
+        }
+
+        for (_, ids) in snapshot.levels.iter_mut() {
+            ids.sort_by_key(|id| snapshot.sstables.get(id).unwrap().first_key());
+        }
+
+        *self.state.write() = Arc::new(snapshot);
+        Ok(())
     }
 
     pub fn sync(&self) -> Result<()> {
@@ -451,18 +502,20 @@ impl LsmStorageInner {
         }
 
         state.imm_memtables.pop();
-        if self.compaction_controller.flush_to_l0() {
-            state.l0_sstables.insert(0, memtable.id());
-        } else {
-            state
-                .levels
-                .insert(0, (memtable.id(), Vec::from([memtable.id()])));
-        }
-        state.sstables.insert(memtable.id(), sstable);
+        self.push_sstable(&mut state, sstable.sst_id());
+        state.sstables.insert(sstable.sst_id(), sstable);
 
         *self.state.write() = Arc::new(state);
 
         Ok(())
+    }
+
+    fn push_sstable(&self, state: &mut LsmStorageState, id: usize) {
+        if self.compaction_controller.flush_to_l0() {
+            state.l0_sstables.insert(0, id);
+        } else {
+            state.levels.insert(0, (id, Vec::from([id])));
+        }
     }
 
     pub fn new_txn(&self) -> Result<()> {
