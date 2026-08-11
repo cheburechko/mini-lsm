@@ -62,13 +62,28 @@ impl MemTable {
     }
 
     /// Create a new mem-table with WAL
-    pub fn create_with_wal(_id: usize, _path: impl AsRef<Path>) -> Result<Self> {
-        unimplemented!()
+    pub fn create_with_wal(id: usize, path: impl AsRef<Path>) -> Result<Self> {
+        let wal = Wal::create(path)?;
+        let mut result = Self::create(id);
+        result.wal = Some(wal);
+        Ok(result)
     }
 
     /// Create a memtable from WAL
-    pub fn recover_from_wal(_id: usize, _path: impl AsRef<Path>) -> Result<Self> {
-        unimplemented!()
+    pub fn recover_from_wal(id: usize, path: impl AsRef<Path>) -> Result<Self> {
+        let map = Arc::new(SkipMap::new());
+        let wal = Some(Wal::recover(path, &map)?);
+        let approximate_size = Arc::new(AtomicUsize::new(
+            map.iter()
+                .map(|entry| entry.key().len() + entry.value().len())
+                .sum(),
+        ));
+        Ok(Self {
+            map,
+            wal,
+            id,
+            approximate_size,
+        })
     }
 
     pub fn for_testing_put_slice(&self, key: &[u8], value: &[u8]) -> Result<()> {
@@ -101,6 +116,10 @@ impl MemTable {
     /// In week 2, day 6, also flush the data to WAL.
     /// In week 3, day 5, modify the function to use the batch API.
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        if let Some(ref wal) = self.wal {
+            wal.put(key, value)?;
+        }
+
         self.map
             .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value));
         self.approximate_size.fetch_add(

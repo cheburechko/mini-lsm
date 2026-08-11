@@ -43,10 +43,10 @@ impl Wal {
 
         loop {
             let key = Self::read(&mut reader);
-            if key.is_err() {
-                if key.as_ref().unwrap_err().kind() == UnexpectedEof {
-                    break;
-                }
+            if let Err(ref e) = key
+                && e.kind() == UnexpectedEof
+            {
+                break;
             }
             let value = Self::read(&mut reader)?;
             skiplist.insert(key?, value);
