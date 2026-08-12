@@ -16,7 +16,7 @@
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 use anyhow::Result;
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, Bytes};
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
@@ -25,6 +25,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::crc::{CRCReader, CRCWriter};
 use crate::key::KeySlice;
 
 pub struct Wal {
@@ -48,14 +49,17 @@ impl Wal {
         let mut reader = BufReader::new(File::open(&path)?);
 
         loop {
-            let key = Self::read(&mut reader);
+            let mut crc_reader = CRCReader::new(&mut reader);
+            let key = Self::read(&mut crc_reader);
             if let Err(ref e) = key
                 && e.kind() == UnexpectedEof
             {
                 break;
             }
-            let value = Self::read(&mut reader)?;
-            skiplist.insert(key?, value);
+            let key = key?;
+            let value = Self::read(&mut crc_reader)?;
+            crc_reader.check()?;
+            skiplist.insert(key, value);
         }
 
         Ok(Self {
@@ -65,7 +69,7 @@ impl Wal {
         })
     }
 
-    fn read(reader: &mut BufReader<File>) -> Result<Bytes, std::io::Error> {
+    fn read<R: Read>(reader: &mut CRCReader<R>) -> Result<Bytes, std::io::Error> {
         let mut len = [0u8; 2];
         let mut buf = Vec::new();
 
@@ -75,19 +79,20 @@ impl Wal {
         Ok(Bytes::from(buf))
     }
 
-    fn write(writer: &mut BufWriter<File>, value: &[u8]) -> Result<()> {
-        let mut len = [0u8; 2];
-
-        len.as_mut_slice().put_u16(value.len() as u16);
-        writer.write_all(len.as_slice())?;
+    fn write<W: Write>(writer: &mut W, value: &[u8]) -> Result<()> {
+        writer.write_all((value.len() as u16).to_be_bytes().as_slice())?;
         writer.write_all(value)?;
         Ok(())
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let mut lock = self.file.lock();
-        Self::write(lock.by_ref(), key)?;
-        Self::write(lock.by_ref(), value)?;
+        let mut writer = CRCWriter::new(lock.by_ref());
+        Self::write(&mut writer, key)?;
+        Self::write(&mut writer, value)?;
+
+        writer.finalize()?;
+
         Ok(())
     }
 
