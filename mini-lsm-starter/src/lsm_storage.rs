@@ -194,7 +194,9 @@ impl MiniLsm {
         if let Some(thread) = self.compaction_thread.lock().take() {
             thread.join().map_err(|err| anyhow!("{:?}", err))?;
         }
-        if !self.inner.options.enable_wal {
+        if self.inner.options.enable_wal {
+            self.sync()?;
+        } else {
             if !self.inner.state.read().memtable.is_empty() {
                 self.inner
                     .force_freeze_memtable(&self.inner.state_lock.lock())?;
@@ -290,7 +292,7 @@ impl LsmStorageInner {
     /// not exist.
     pub(crate) fn open(path: impl AsRef<Path>, options: LsmStorageOptions) -> Result<Self> {
         let path = path.as_ref();
-        let state = LsmStorageState::create(&options);
+        let mut state = LsmStorageState::create(&options);
         if !path.exists() {
             std::fs::create_dir_all(path)?;
         }
@@ -312,7 +314,15 @@ impl LsmStorageInner {
         let (manifest, records) = if manifest_path.exists() {
             Manifest::recover(manifest_path)
         } else {
-            Ok((Manifest::create(manifest_path)?, Vec::new()))
+            let manifest = Manifest::create(manifest_path)?;
+            if options.enable_wal {
+                state.memtable = Arc::new(MemTable::create_with_wal(
+                    0,
+                    Self::path_of_wal_static(&path, 0),
+                )?);
+                manifest.add_record_when_init(ManifestRecord::NewMemtable(0))?;
+            }
+            Ok((manifest, Vec::new()))
         }?;
 
         let storage = Self {
@@ -337,16 +347,16 @@ impl LsmStorageInner {
         let mut snapshot = self.state.read().as_ref().clone();
         let mut memtable_ids = HashSet::new();
 
-        for record in records {
+        for record in records.iter() {
             match record {
                 ManifestRecord::Flush(id) => {
                     if self.options.enable_wal {
-                        assert!(memtable_ids.remove(&id));
+                        assert!(memtable_ids.remove(id));
                     }
-                    self.push_sstable(&mut snapshot, id);
+                    self.push_sstable(&mut snapshot, *id);
                 }
                 ManifestRecord::NewMemtable(id) => {
-                    memtable_ids.insert(id);
+                    memtable_ids.insert(*id);
                 }
                 ManifestRecord::Compaction(task, items) => {
                     (snapshot, _) = self
@@ -356,7 +366,7 @@ impl LsmStorageInner {
             }
         }
 
-        let mut max_id = self.next_sst_id.load(Relaxed);
+        let mut max_id = 0;
 
         if self.options.enable_wal {
             let mut memtable_ids: Vec<usize> = memtable_ids.iter().copied().collect();
@@ -399,16 +409,24 @@ impl LsmStorageInner {
             ids.sort_by_key(|id| snapshot.sstables.get(id).unwrap().first_key());
         }
 
-        if snapshot.memtable.id() != max_id {
+        if records.is_empty() {
+            self.next_sst_id.store(0, Relaxed);
             snapshot.memtable = Arc::new(self.create_memtable()?);
+            if self.options.enable_wal
+                && let Some(ref manifest) = self.manifest
+            {
+                manifest
+                    .add_record_when_init(ManifestRecord::NewMemtable(snapshot.memtable.id()))?;
+            }
+        } else {
+            self.next_sst_id.store(max_id + 1, Relaxed);
         }
-        self.next_sst_id.store(max_id + 1, Relaxed);
         *self.state.write() = Arc::new(snapshot);
         Ok(())
     }
 
     pub fn sync(&self) -> Result<()> {
-        unimplemented!()
+        self.state.read().memtable.sync_wal()
     }
 
     pub fn add_compaction_filter(&self, compaction_filter: CompactionFilter) {
@@ -498,6 +516,7 @@ impl LsmStorageInner {
 
         let mut state = self.state.read().as_ref().clone();
         state.imm_memtables.insert(0, state.memtable.clone());
+        state.memtable.sync_wal()?;
         state.memtable = Arc::new(memtable);
 
         *self.state.write() = Arc::new(state);
@@ -537,10 +556,6 @@ impl LsmStorageInner {
         {
             let state_lock = self.state_lock.lock();
 
-            if let Some(ref manifest) = self.manifest {
-                manifest.add_record(&state_lock, ManifestRecord::Flush(memtable.id()))?;
-            }
-
             let mut state = self.state.read().as_ref().clone();
             if state
                 .imm_memtables
@@ -548,6 +563,10 @@ impl LsmStorageInner {
                 .is_none_or(|table| table.id() != memtable.id())
             {
                 return Ok(());
+            }
+
+            if let Some(ref manifest) = self.manifest {
+                manifest.add_record(&state_lock, ManifestRecord::Flush(memtable.id()))?;
             }
 
             state.imm_memtables.pop();
