@@ -51,7 +51,7 @@ impl LsmIterator {
     }
 
     fn update_is_valid(&mut self) {
-        self.valid = self.inner.is_valid() && self.range.contains(self.inner.key().raw_ref())
+        self.valid = self.inner.is_valid() && self.range.contains(self.inner.key().key_ref())
     }
 }
 
@@ -63,7 +63,7 @@ impl StorageIterator for LsmIterator {
     }
 
     fn key(&self) -> &[u8] {
-        self.inner.key().raw_ref()
+        self.inner.key().key_ref()
     }
 
     fn value(&self) -> &[u8] {

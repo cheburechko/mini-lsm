@@ -79,7 +79,7 @@ impl SsTableBuilder {
             self.finalize_block();
             _ = self.builder.add(key, value);
         }
-        self.key_hashes.push(farmhash::fingerprint32(key.raw_ref()));
+        self.key_hashes.push(farmhash::fingerprint32(key.key_ref()));
     }
 
     /// Get the estimated size of the SSTable.

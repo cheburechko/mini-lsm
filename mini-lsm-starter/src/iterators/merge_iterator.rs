@@ -21,7 +21,7 @@ use std::collections::binary_heap::PeekMut;
 
 use anyhow::{Ok, Result};
 
-use crate::key::KeySlice;
+use crate::key::{KeySlice, TS_DEFAULT};
 
 use super::StorageIterator;
 
@@ -81,7 +81,7 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
     fn key(&self) -> KeySlice<'_> {
         match self.current {
             Some(ref iter) => iter.1.key(),
-            None => KeySlice::from_slice(&[]),
+            None => KeySlice::from_slice(&[], TS_DEFAULT),
         }
     }
 

@@ -61,7 +61,7 @@ impl BlockBuilder {
         if is_first_key {
             self.first_key.set_from_slice(key);
         } else {
-            let to_add = 6 + key.len() + value.len();
+            let to_add = 6 + key.key_len() + value.len();
             if to_add + self.get_estimated_size() > self.block_size {
                 return false;
             }
@@ -69,13 +69,13 @@ impl BlockBuilder {
 
         self.offsets.push(self.data.len() as u16);
         if is_first_key {
-            self.data.put_u16(key.len() as u16);
-            self.data.put(key.raw_ref());
+            self.data.put_u16(key.key_len() as u16);
+            self.data.put(key.key_ref());
         } else {
-            let overlap = get_overlap(self.first_key.raw_ref(), key.raw_ref());
+            let overlap = get_overlap(self.first_key.key_ref(), key.key_ref());
             self.data.put_u16(overlap as u16);
-            self.data.put_u16((key.len() - overlap) as u16);
-            self.data.put(&key.raw_ref()[overlap..])
+            self.data.put_u16((key.key_len() - overlap) as u16);
+            self.data.put(&key.key_ref()[overlap..])
         }
         self.data.put_u16(value.len() as u16);
         self.data.put(value);

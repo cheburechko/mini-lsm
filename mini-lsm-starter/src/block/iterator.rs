@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use crate::key::{KeySlice, KeyVec};
+use crate::key::{KeySlice, KeyVec, TS_DEFAULT};
 
 use super::Block;
 
@@ -57,7 +57,7 @@ impl BlockIterator {
 
     /// Returns the key of the current entry.
     pub fn key(&self) -> KeySlice<'_> {
-        KeySlice::from_slice(self.key.raw_ref())
+        KeySlice::from_slice(self.key.key_ref(), TS_DEFAULT)
     }
 
     /// Returns the value of the current entry.

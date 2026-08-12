@@ -31,7 +31,7 @@ use nom::AsBytes;
 
 use crate::block::Block;
 use crate::crc;
-use crate::key::{KeyBytes, KeySlice};
+use crate::key::{KeyBytes, KeySlice, TS_DEFAULT};
 use crate::lsm_storage::BlockCache;
 
 use self::bloom::Bloom;
@@ -50,7 +50,7 @@ pub struct BlockMeta {
 
 fn read_value(buf: &mut impl Buf) -> KeyBytes {
     let len = buf.get_u16() as usize;
-    KeyBytes::from_bytes(buf.copy_to_bytes(len))
+    KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(len), TS_DEFAULT)
 }
 
 impl BlockMeta {
@@ -61,10 +61,10 @@ impl BlockMeta {
         buf.put_u16(block_meta.len() as u16);
         for item in block_meta {
             buf.put_u64(item.offset as u64);
-            buf.put_u16(item.first_key.len() as u16);
-            buf.put(item.first_key.raw_ref());
-            buf.put_u16(item.last_key.len() as u16);
-            buf.put(item.last_key.raw_ref());
+            buf.put_u16(item.first_key.key_len() as u16);
+            buf.put(item.first_key.key_ref());
+            buf.put_u16(item.last_key.key_len() as u16);
+            buf.put(item.last_key.key_ref());
         }
     }
 

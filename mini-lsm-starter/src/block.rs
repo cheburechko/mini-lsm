@@ -89,7 +89,7 @@ impl Block {
         to.clear();
         if from.as_ptr() == self.data.as_ptr() {
             to.append(read_value(from));
-            to.len() + U16_SIZE
+            to.key_len() + U16_SIZE
         } else {
             let overlap = from.get_u16() as usize;
             to.append(&self.data[U16_SIZE..U16_SIZE + overlap]);
@@ -105,7 +105,7 @@ impl Block {
         self.offsets.partition_point(|offset| {
             let mut buf = &self.data[(*offset as usize)..];
             self.read_key(&mut buf, &mut cur_key);
-            cur_key.raw_ref() < key.raw_ref()
+            cur_key.key_ref() < key.key_ref()
         })
     }
 

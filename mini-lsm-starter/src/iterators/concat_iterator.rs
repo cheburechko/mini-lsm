@@ -18,8 +18,7 @@ use anyhow::Result;
 
 use super::StorageIterator;
 use crate::{
-    key::KeySlice,
-    table::{SsTable, SsTableIterator},
+    key::{KeySlice, TS_DEFAULT}, table::{SsTable, SsTableIterator},
 };
 
 /// Concat multiple iterators ordered in key order and their key ranges do not overlap. We do not want to create the
@@ -73,7 +72,7 @@ impl StorageIterator for SstConcatIterator {
         if let Some(ref iter) = self.current {
             iter.key()
         } else {
-            KeySlice::from_slice(b"")
+            KeySlice::from_slice(b"", TS_DEFAULT)
         }
     }
 

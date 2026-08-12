@@ -57,14 +57,14 @@ impl LeveledCompactionController {
         let lower = std::ops::Bound::Included(
             tables
                 .iter()
-                .map(|table| table.first_key().raw_ref())
+                .map(|table| table.first_key().key_ref())
                 .min_by_key(|x| *x)
                 .unwrap(),
         );
         let upper = std::ops::Bound::Included(
             tables
                 .iter()
-                .map(|table| table.last_key().raw_ref())
+                .map(|table| table.last_key().key_ref())
                 .max_by_key(|x| *x)
                 .unwrap(),
         );
