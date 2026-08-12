@@ -87,7 +87,7 @@ impl Block {
 
     fn read_key(&self, from: &mut &[u8], to: &mut KeyVec) -> usize {
         to.clear();
-        if from.as_ptr() == self.data.as_ptr() {
+        let size = if from.as_ptr() == self.data.as_ptr() {
             to.append(read_value(from));
             to.key_len() + U16_SIZE
         } else {
@@ -97,7 +97,9 @@ impl Block {
             to.append(&from[..rest]);
             from.advance(rest);
             rest + U16_SIZE * 2
-        }
+        } + size_of::<u64>();
+        to.set_ts(from.get_u64());
+        size
     }
 
     pub fn find_key(&self, key: KeySlice) -> usize {
@@ -105,7 +107,7 @@ impl Block {
         self.offsets.partition_point(|offset| {
             let mut buf = &self.data[(*offset as usize)..];
             self.read_key(&mut buf, &mut cur_key);
-            cur_key.key_ref() < key.key_ref()
+            cur_key.as_key_slice() < key
         })
     }
 

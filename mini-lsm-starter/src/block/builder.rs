@@ -77,6 +77,7 @@ impl BlockBuilder {
             self.data.put_u16((key.key_len() - overlap) as u16);
             self.data.put(&key.key_ref()[overlap..])
         }
+        self.data.put_u64(key.ts());
         self.data.put_u16(value.len() as u16);
         self.data.put(value);
         true
