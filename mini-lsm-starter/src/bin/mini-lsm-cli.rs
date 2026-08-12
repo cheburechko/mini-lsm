@@ -15,7 +15,6 @@
 mod wrapper;
 
 use rustyline::DefaultEditor;
-use rustyline::error::ReadlineError;
 use wrapper::mini_lsm_wrapper;
 
 use anyhow::Result;
@@ -250,14 +249,7 @@ impl Repl {
         self.bootstrap()?;
 
         loop {
-            let result = self.process_line();
-            if let Err(ref e) = result {
-                if e.downcast_ref::<ReadlineError>().is_some() {
-                    result?
-                } else {
-                    println!("{:#}", e)
-                }
-            }
+            self.process_line()?;
         }
     }
 
@@ -267,9 +259,14 @@ impl Repl {
             // Skip noop
             return Ok(());
         }
-        let command = Command::parse(&readline)?;
-        self.handler.handle(&command)?;
-        self.editor.add_history_entry(readline)?;
+        let command = Command::parse(&readline);
+        match command {
+            Ok(command) => {
+                self.handler.handle(&command)?;
+                self.editor.add_history_entry(readline)?;
+            }
+            Err(e) => println!("{:#}", e),
+        }
         Ok(())
     }
 
