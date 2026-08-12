@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 pub(crate) mod bloom;
 mod builder;
 mod iterator;
@@ -31,12 +28,10 @@ use nom::AsBytes;
 
 use crate::block::Block;
 use crate::crc;
-use crate::key::{KeyBytes, KeySlice, TS_DEFAULT};
+use crate::key::{KeyBytes, KeySlice};
 use crate::lsm_storage::BlockCache;
 
 use self::bloom::Bloom;
-
-const U32_SIZE: u64 = size_of::<u32>() as u64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockMeta {
@@ -50,7 +45,7 @@ pub struct BlockMeta {
 
 fn read_value(buf: &mut impl Buf) -> KeyBytes {
     let len = buf.get_u16() as usize;
-    KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(len), TS_DEFAULT)
+    KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(len), buf.get_u64())
 }
 
 impl BlockMeta {
@@ -61,10 +56,14 @@ impl BlockMeta {
         buf.put_u16(block_meta.len() as u16);
         for item in block_meta {
             buf.put_u64(item.offset as u64);
+
             buf.put_u16(item.first_key.key_len() as u16);
             buf.put(item.first_key.key_ref());
+            buf.put_u64(item.first_key.ts());
+
             buf.put_u16(item.last_key.key_len() as u16);
             buf.put(item.last_key.key_ref());
+            buf.put_u64(item.last_key.ts());
         }
     }
 
@@ -165,7 +164,7 @@ impl SsTable {
             file,
             block_meta,
             block_meta_offset: block_meta_offset as usize,
-            id: 0,
+            id,
             block_cache,
             first_key,
             last_key,
