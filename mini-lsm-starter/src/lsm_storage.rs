@@ -36,10 +36,10 @@ use crate::iterators::StorageIterator;
 use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
-use crate::key::{KeySlice, TS_DEFAULT};
+use crate::key::{KeySlice, TS_RANGE_BEGIN, TS_RANGE_END};
 use crate::lsm_iterator::{FusedIterator, LsmIterator, LsmIteratorInner};
 use crate::manifest::{Manifest, ManifestRecord};
-use crate::mem_table::{MemTable, map_bound};
+use crate::mem_table::MemTable;
 use crate::mvcc::LsmMvccInner;
 use crate::table::{FileObject, SsTable, SsTableBuilder, SsTableIterator};
 
@@ -441,11 +441,11 @@ impl LsmStorageInner {
             let hash = [farmhash::fingerprint32(key)];
             let iter = Self::create_sstable_merge_iter(
                 state,
-                Bound::Included(key),
-                Bound::Included(key),
+                Bound::Included(KeySlice::from_slice(key, TS_RANGE_BEGIN)),
+                Bound::Included(KeySlice::from_slice(key, TS_RANGE_END)),
                 Some(&hash),
             )?;
-            if iter.is_valid() && iter.key() == KeySlice::from_slice(key, TS_DEFAULT) {
+            if iter.is_valid() && iter.key().key_ref() == key {
                 result.replace(Bytes::copy_from_slice(iter.value()));
             }
         }
@@ -613,11 +613,23 @@ impl LsmStorageInner {
                 .collect(),
         );
 
+        let lower = match lower {
+            Bound::Included(key) => Bound::Included(KeySlice::from_slice(key, TS_RANGE_BEGIN)),
+            Bound::Excluded(key) => Bound::Excluded(KeySlice::from_slice(key, TS_RANGE_END)),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        let upper = match upper {
+            Bound::Included(key) => Bound::Included(KeySlice::from_slice(key, TS_RANGE_END)),
+            Bound::Excluded(key) => Bound::Excluded(KeySlice::from_slice(key, TS_RANGE_BEGIN)),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
         let sstable_iter = Self::create_sstable_merge_iter(guard, lower, upper, None)?;
 
         let mut iter = FusedIterator::new(LsmIterator::new(
             LsmIteratorInner::create(memtable_iter, sstable_iter)?,
-            map_bound(upper),
+            upper.map(|key| Bytes::copy_from_slice(key.key_ref())),
         )?);
         if iter.is_valid() && iter.value().is_empty() {
             iter.next()?;
@@ -627,8 +639,8 @@ impl LsmStorageInner {
 
     fn create_sstable_merge_iter(
         state: ReadLockGuard,
-        lower: Bound<&[u8]>,
-        upper: Bound<&[u8]>,
+        lower: Bound<KeySlice>,
+        upper: Bound<KeySlice>,
         key_hashes: Option<&[u32]>,
     ) -> Result<TwoMergeIterator<MergeIterator<SsTableIterator>, MergeIterator<SstConcatIterator>>>
     {
@@ -666,10 +678,10 @@ impl LsmStorageInner {
             let tables = state.get_sstables(ids.as_ref())?;
             let start_pos = match lower {
                 Bound::Excluded(key) => {
-                    tables.partition_point(|table| table.last_key().key_ref() <= key)
+                    tables.partition_point(|table| table.last_key().as_key_slice() <= key)
                 }
                 Bound::Included(key) => {
-                    tables.partition_point(|table| table.last_key().key_ref() < key)
+                    tables.partition_point(|table| table.last_key().as_key_slice() < key)
                 }
                 Bound::Unbounded => 0,
             };
@@ -678,10 +690,10 @@ impl LsmStorageInner {
             } else {
                 match upper {
                     Bound::Included(key) => {
-                        tables.partition_point(|table| table.first_key().key_ref() <= key)
+                        tables.partition_point(|table| table.first_key().as_key_slice() <= key)
                     }
                     Bound::Excluded(key) => {
-                        tables.partition_point(|table| table.first_key().key_ref() < key)
+                        tables.partition_point(|table| table.first_key().as_key_slice() < key)
                     }
                     Bound::Unbounded => tables.len(),
                 }
@@ -701,16 +713,13 @@ impl LsmStorageInner {
         let create_l0_sstable_iter = |table| -> Result<Box<SsTableIterator>> {
             let iter = match lower {
                 Bound::Excluded(key) => {
-                    let key = KeySlice::from_slice(key, TS_DEFAULT);
                     let mut iter = SsTableIterator::create_and_seek_to_key(table, key)?;
                     if iter.is_valid() && iter.key() == key {
                         iter.next()?;
                     }
                     Ok(iter)
                 }
-                Bound::Included(key) => {
-                    SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(key, TS_DEFAULT))
-                }
+                Bound::Included(key) => SsTableIterator::create_and_seek_to_key(table, key),
                 Bound::Unbounded => SsTableIterator::create_and_seek_to_first(table),
             };
             Ok(Box::new(iter?))
@@ -726,11 +735,8 @@ impl LsmStorageInner {
         let mut ln_iters = Vec::with_capacity(ln_tables.len());
         for tables in ln_tables {
             ln_iters.push(Box::new(match lower {
-                Bound::Included(key) => {
-                    SstConcatIterator::create_and_seek_to_key(tables, KeySlice::from_slice(key, TS_DEFAULT))
-                }
+                Bound::Included(key) => SstConcatIterator::create_and_seek_to_key(tables, key),
                 Bound::Excluded(key) => {
-                    let key = KeySlice::from_slice(key, TS_DEFAULT);
                     let mut iter = SstConcatIterator::create_and_seek_to_key(tables, key)?;
                     if iter.is_valid() && iter.key() == key {
                         iter.next()?;
@@ -749,17 +755,17 @@ impl LsmStorageInner {
 
 pub(crate) fn has_intersection(
     table: &Arc<SsTable>,
-    lower: Bound<&[u8]>,
-    upper: Bound<&[u8]>,
+    lower: Bound<KeySlice>,
+    upper: Bound<KeySlice>,
 ) -> bool {
     match lower {
         Bound::Excluded(bound) => {
-            if table.last_key().key_ref() <= bound {
+            if table.last_key().as_key_slice() <= bound {
                 return false;
             }
         }
         Bound::Included(bound) => {
-            if table.last_key().key_ref() < bound {
+            if table.last_key().as_key_slice() < bound {
                 return false;
             }
         }
@@ -767,12 +773,12 @@ pub(crate) fn has_intersection(
     }
     match upper {
         Bound::Excluded(bound) => {
-            if table.first_key().key_ref() >= bound {
+            if table.first_key().as_key_slice() >= bound {
                 return false;
             }
         }
         Bound::Included(bound) => {
-            if table.first_key().key_ref() > bound {
+            if table.first_key().as_key_slice() > bound {
                 return false;
             }
         }
