@@ -460,12 +460,7 @@ impl LsmStorageInner {
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
-    pub fn write_batch<T: AsRef<[u8]>>(&self, _batch: &[WriteBatchRecord<T>]) -> Result<()> {
-        unimplemented!()
-    }
-
-    /// Put a key-value pair into the storage by writing into the current memtable.
-    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+    pub fn write_batch<T: AsRef<[u8]>>(&self, batch: &[WriteBatchRecord<T>]) -> Result<()> {
         let mut read_guard = self.state.read();
         while read_guard.memtable.approximate_size() > self.options.target_sst_size {
             drop(read_guard);
@@ -475,12 +470,25 @@ impl LsmStorageInner {
             }
             read_guard = self.state.read();
         }
-        read_guard.memtable.put(key, value)
+        for record in batch {
+            match record {
+                WriteBatchRecord::Put(key, value) => {
+                    read_guard.memtable.put(key.as_ref(), value.as_ref())
+                }
+                WriteBatchRecord::Del(key) => read_guard.memtable.put(key.as_ref(), b""),
+            }?;
+        }
+        Ok(())
+    }
+
+    /// Put a key-value pair into the storage by writing into the current memtable.
+    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.write_batch(&[WriteBatchRecord::Put(key, value)])
     }
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, key: &[u8]) -> Result<()> {
-        self.put(key, b"")
+        self.write_batch(&[WriteBatchRecord::Del(key)])
     }
 
     pub(crate) fn path_of_sst_static(path: impl AsRef<Path>, id: usize) -> PathBuf {
