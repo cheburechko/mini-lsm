@@ -16,7 +16,7 @@
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 use anyhow::Result;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
@@ -70,11 +70,10 @@ impl Wal {
     }
 
     fn read<R: Read>(reader: &mut CRCReader<R>) -> Result<Bytes, std::io::Error> {
-        let mut len = [0u8; 2];
         let mut buf = Vec::new();
 
-        reader.read_exact(len.as_mut_slice())?;
-        buf.resize(len.as_slice().get_u16() as usize, 0);
+        let len = reader.read_u16()?;
+        buf.resize(len as usize, 0);
         reader.read_exact(buf.as_mut_slice())?;
         Ok(Bytes::from(buf))
     }

@@ -23,6 +23,7 @@ use parking_lot::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 
 use crate::compact::CompactionTask;
+use crate::crc::{CRCReader, CRCWriter};
 
 pub struct Manifest {
     file: Arc<Mutex<File>>,
@@ -45,10 +46,18 @@ impl Manifest {
     pub fn recover(path: impl AsRef<Path>) -> Result<(Self, Vec<ManifestRecord>)> {
         let mut manifest = Vec::new();
         {
-            let file = File::open(&path)?;
-            let mut deser = serde_json::Deserializer::from_reader(BufReader::new(file));
-            while let Ok(record) = ManifestRecord::deserialize(&mut deser) {
-                manifest.push(record);
+            let mut reader = BufReader::new(File::open(&path)?);
+            let mut buf = Vec::new();
+            loop {
+                let mut crc_reader = CRCReader::new(&mut reader);
+                let len = crc_reader.read_u16();
+                if len.is_err() {
+                    break;
+                }
+                buf.resize(len? as usize, 0);
+                crc_reader.read_exact(buf.as_mut_slice())?;
+                crc_reader.check()?;
+                manifest.push(serde_json::from_slice(&buf)?);
             }
         }
         Ok((
@@ -69,7 +78,11 @@ impl Manifest {
 
     pub fn add_record_when_init(&self, record: ManifestRecord) -> Result<()> {
         let mut file = self.file.lock();
-        file.write_all(serde_json::to_vec(&record)?.as_slice())?;
+        let mut writer = CRCWriter::new(file.by_ref());
+        let value = serde_json::to_vec(&record)?;
+        writer.write_all((value.len() as u16).to_be_bytes().as_slice())?;
+        writer.write_all(value.as_slice())?;
+        writer.finalize()?;
         file.sync_all()?;
         Ok(())
     }

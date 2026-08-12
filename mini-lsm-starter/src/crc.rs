@@ -58,6 +58,12 @@ impl<R: Read> CRCReader<R> {
         result
     }
 
+    pub fn read_u16(&mut self) -> std::io::Result<u16> {
+        let mut result = [0u8; 2];
+        self.read_exact(result.as_mut_slice())?;
+        Ok(result.as_slice().get_u16())
+    }
+
     pub fn check(mut self) -> Result<()> {
         let mut expected_crc = [0u8; 4];
         self.reader.read_exact(expected_crc.as_mut_slice())?;
