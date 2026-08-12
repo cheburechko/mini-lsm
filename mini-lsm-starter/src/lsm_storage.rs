@@ -315,13 +315,6 @@ impl LsmStorageInner {
             Manifest::recover(manifest_path)
         } else {
             let manifest = Manifest::create(manifest_path)?;
-            if options.enable_wal {
-                state.memtable = Arc::new(MemTable::create_with_wal(
-                    0,
-                    Self::path_of_wal_static(path, 0),
-                )?);
-                manifest.add_record_when_init(ManifestRecord::NewMemtable(0))?;
-            }
             Ok((manifest, Vec::new()))
         }?;
 
