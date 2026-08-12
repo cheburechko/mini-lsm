@@ -107,6 +107,8 @@ impl SsTableBuilder {
 
         let meta_offset = self.data.len();
         BlockMeta::encode_block_meta(self.meta.as_slice(), &mut self.data);
+        let crc = crc32fast::hash(&self.data[meta_offset..]);
+        self.data.put_u32(crc);
         self.data.put_u32(meta_offset as u32);
 
         let bits_per_key =

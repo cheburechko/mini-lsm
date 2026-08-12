@@ -30,6 +30,7 @@ pub use iterator::SsTableIterator;
 use nom::AsBytes;
 
 use crate::block::Block;
+use crate::crc;
 use crate::key::{KeyBytes, KeySlice};
 use crate::lsm_storage::BlockCache;
 
@@ -154,8 +155,9 @@ impl SsTable {
         let buf = file.read(bloom_offset - OFFSET_SIZE, OFFSET_SIZE)?;
         let block_meta_offset = buf.as_slice().get_u32() as u64;
         let block_meta_size = file.1 - block_meta_offset - OFFSET_SIZE * 2 - bloom_size;
-        let block_meta =
-            BlockMeta::decode_block_meta(file.read(block_meta_offset, block_meta_size)?.as_slice());
+        let block_meta = BlockMeta::decode_block_meta(crc::check_crc(
+            file.read(block_meta_offset, block_meta_size)?.as_slice(),
+        )?);
 
         let first_key = block_meta.first().context("empty meta")?.first_key.clone();
         let last_key = block_meta.last().context("empty meta")?.last_key.clone();
@@ -205,26 +207,11 @@ impl SsTable {
             self.block_meta_offset
         } as u64;
 
-        let data = self.file.read(
-            meta.offset as u64,
-            next_offset - meta.offset as u64 - U32_SIZE,
-        )?;
-
-        let crc = crc32fast::hash(data.as_bytes());
-        let expected_crc = self
+        let data = self
             .file
-            .read(next_offset - U32_SIZE, U32_SIZE)?
-            .as_slice()
-            .get_u32();
-        if crc == expected_crc {
-            Ok(Arc::new(Block::decode(data.as_ref())))
-        } else {
-            Err(anyhow!(
-                "CRC mismatch: expected {}, got {}",
-                expected_crc,
-                crc
-            ))
-        }
+            .read(meta.offset as u64, next_offset - meta.offset as u64)?;
+
+        Ok(Arc::new(Block::decode(crc::check_crc(data.as_bytes())?)))
     }
 
     /// Read a block from disk, with block cache. (Day 4)

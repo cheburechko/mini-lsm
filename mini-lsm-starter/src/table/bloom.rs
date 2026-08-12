@@ -17,6 +17,8 @@
 use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
 
+use crate::crc;
+
 /// Implements a bloom filter
 #[derive(Debug)]
 pub struct Bloom {
@@ -62,6 +64,7 @@ impl<T: AsMut<[u8]>> BitSliceMut for T {
 impl Bloom {
     /// Decode a bloom filter
     pub fn decode(buf: &[u8]) -> Result<Self> {
+        let buf = crc::check_crc(buf)?;
         let filter = &buf[..buf.len() - 1];
         let k = buf[buf.len() - 1];
         Ok(Self {
@@ -72,8 +75,11 @@ impl Bloom {
 
     /// Encode a bloom filter
     pub fn encode(&self, buf: &mut Vec<u8>) {
+        let pos = buf.len();
         buf.extend(&self.filter);
         buf.put_u8(self.k);
+        let crc = crc32fast::hash(&buf[pos..]);
+        buf.put_u32(crc);
     }
 
     /// Get bloom filter bits per key from entries count and FPR
