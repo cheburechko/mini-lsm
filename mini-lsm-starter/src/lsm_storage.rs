@@ -318,7 +318,7 @@ impl LsmStorageInner {
             if options.enable_wal {
                 state.memtable = Arc::new(MemTable::create_with_wal(
                     0,
-                    Self::path_of_wal_static(&path, 0),
+                    Self::path_of_wal_static(path, 0),
                 )?);
                 manifest.add_record_when_init(ManifestRecord::NewMemtable(0))?;
             }
@@ -361,7 +361,7 @@ impl LsmStorageInner {
                 ManifestRecord::Compaction(task, items) => {
                     (snapshot, _) = self
                         .compaction_controller
-                        .apply_compaction_result(&snapshot, &task, &items, true);
+                        .apply_compaction_result(&snapshot, task, items, true);
                 }
             }
         }
