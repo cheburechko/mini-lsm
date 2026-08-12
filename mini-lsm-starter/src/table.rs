@@ -27,12 +27,15 @@ use anyhow::{Context, Result, anyhow};
 pub use builder::SsTableBuilder;
 use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
+use nom::AsBytes;
 
 use crate::block::Block;
 use crate::key::{KeyBytes, KeySlice};
 use crate::lsm_storage::BlockCache;
 
 use self::bloom::Bloom;
+
+const U32_SIZE: u64 = size_of::<u32>() as u64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockMeta {
@@ -195,15 +198,33 @@ impl SsTable {
             .block_meta
             .get(block_idx)
             .context("block_id out of range")?;
+
         let next_offset = if let Some(next_meta) = self.block_meta.get(block_idx + 1) {
             next_meta.offset
         } else {
             self.block_meta_offset
         } as u64;
-        let data = self
+
+        let data = self.file.read(
+            meta.offset as u64,
+            next_offset - meta.offset as u64 - U32_SIZE,
+        )?;
+
+        let crc = crc32fast::hash(data.as_bytes());
+        let expected_crc = self
             .file
-            .read(meta.offset as u64, next_offset - meta.offset as u64)?;
-        Ok(Arc::new(Block::decode(data.as_ref())))
+            .read(next_offset - U32_SIZE, U32_SIZE)?
+            .as_slice()
+            .get_u32();
+        if crc == expected_crc {
+            Ok(Arc::new(Block::decode(data.as_ref())))
+        } else {
+            Err(anyhow!(
+                "CRC mismatch: expected {}, got {}",
+                expected_crc,
+                crc
+            ))
+        }
     }
 
     /// Read a block from disk, with block cache. (Day 4)

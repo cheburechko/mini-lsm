@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::BufMut;
+use nom::AsBytes;
 
 use super::{BlockMeta, SsTable};
 use crate::{
@@ -63,7 +64,10 @@ impl SsTableBuilder {
             last_key: block.get_last_key().into_key_bytes(),
         });
 
-        self.data.extend(block.encode());
+        let block_data = block.encode();
+        let crc = crc32fast::hash(block_data.as_bytes());
+        self.data.extend(block_data);
+        self.data.put_u32(crc);
     }
 
     /// Adds a key-value pair to SSTable.
